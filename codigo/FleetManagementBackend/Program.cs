@@ -1,5 +1,6 @@
 using FleetManagementBackend.Repositories;
 using System.Text.Json.Serialization;
+using FleetManagementBackend.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -28,6 +29,9 @@ builder.Services.AddCors(options =>
               .AllowAnyHeader();
     });
 });
+// 4. Registramos el servicio de autenticación
+
+builder.Services.AddScoped<IAuthService, AuthService>();
 
 var app = builder.Build();
 

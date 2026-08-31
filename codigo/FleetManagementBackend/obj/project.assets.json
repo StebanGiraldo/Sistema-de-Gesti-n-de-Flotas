@@ -517,11 +517,11 @@
   "project": {
     "version": "1.0.0",
     "restore": {
-      "projectUniqueName": "C:\\Users\\user\\Documents\\Patrones de Sofware\\Code\\FleetManagementBackend\\FleetManagementBackend.csproj",
+      "projectUniqueName": "C:\\Users\\user\\Documents\\Patrones de Sofware\\Sistema-de-Gesti-n-de-Flotas\\codigo\\FleetManagementBackend\\FleetManagementBackend.csproj",
       "projectName": "FleetManagementBackend",
-      "projectPath": "C:\\Users\\user\\Documents\\Patrones de Sofware\\Code\\FleetManagementBackend\\FleetManagementBackend.csproj",
+      "projectPath": "C:\\Users\\user\\Documents\\Patrones de Sofware\\Sistema-de-Gesti-n-de-Flotas\\codigo\\FleetManagementBackend\\FleetManagementBackend.csproj",
       "packagesPath": "C:\\Users\\user\\.nuget\\packages\\",
-      "outputPath": "C:\\Users\\user\\Documents\\Patrones de Sofware\\Code\\FleetManagementBackend\\obj\\",
+      "outputPath": "C:\\Users\\user\\Documents\\Patrones de Sofware\\Sistema-de-Gesti-n-de-Flotas\\codigo\\FleetManagementBackend\\obj\\",
       "projectStyle": "PackageReference",
       "configFilePaths": [
         "C:\\Users\\user\\AppData\\Roaming\\NuGet\\NuGet.Config"
