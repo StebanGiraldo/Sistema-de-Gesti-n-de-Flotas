@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>FleetControl · Panel administrativo</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+
+<div class="app-shell">
+
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark">🚚</div>
+      <div>
+        FleetControl
+        <div class="brand-sub">Panel administrativo</div>
+      </div>
+    </div>
+    <div class="topbar-right">
+      <span class="topbar-location">📍 Operaciones · Santander, Colombia</span>
+      <div class="user-chip">
+        <span>👤 <span id="userFullName">—</span></span>
+        <button id="logoutBtn" class="btn btn-ghost btn-sm">Salir</button>
+      </div>
+    </div>
+  </header>
+
+  <div class="app-body">
+    <aside class="sidebar">
+      <nav class="tabs-nav">
+        <button class="tab-btn active" data-tab="map">🗺️&nbsp; Mapa y vehículos</button>
+        <button class="tab-btn" data-tab="routes">📦&nbsp; Rutas y cargas</button>
+        <button class="tab-btn" data-tab="maintenance">🔧&nbsp; Mantenimiento</button>
+        <button class="tab-btn" data-tab="alerts">🚨&nbsp; Alertas</button>
+        <button class="tab-btn" data-tab="audit">📋&nbsp; Auditoría</button>
+      </nav>
+
+      <div id="vehicleListPanel" class="sidebar-vehicle-list">
+        <div class="sidebar-section-header">
+          <span>VEHÍCULOS (<span id="vehicleCount">0</span>)</span>
+          <button id="addVehicleBtn" class="btn btn-primary btn-sm">+ Vehículo</button>
+        </div>
+        <div id="vehicleList" class="vehicle-list">
+          <p class="text-faint text-sm" style="padding: 10px 14px;">Cargando…</p>
+        </div>
+      </div>
+    </aside>
+
+    <main class="main-content">
+
+      <!-- TAB: Mapa y vehículos -->
+      <section id="tab-map" class="tab-panel active">
+        <div id="map" class="map-container"></div>
+      </section>
+
+      <!-- TAB: Rutas y cargas -->
+      <section id="tab-routes" class="tab-panel">
+        <div class="panel-toolbar">
+          <h2>Rutas de reparto <span class="text-muted text-sm">— optimización y asignación de cargas</span></h2>
+          <div class="flex gap-8">
+            <button id="createExpressRouteBtn" class="btn btn-secondary btn-sm">⚡ Ruta express</button>
+            <button id="createRouteBtn" class="btn btn-primary btn-sm">+ Nueva ruta</button>
+          </div>
+        </div>
+        <div class="panel">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Ruta</th><th>Vehículo</th><th>Conductor</th><th>Estado</th>
+                <th>Distancia / Tiempo</th><th>Programada</th><th>Retraso</th><th></th>
+              </tr>
+            </thead>
+            <tbody id="routesTableBody">
+              <tr class="empty-row"><td colspan="8">Cargando rutas…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- TAB: Mantenimiento -->
+      <section id="tab-maintenance" class="tab-panel">
+        <div class="panel-toolbar">
+          <h2>Mantenimiento predictivo</h2>
+          <button id="registerMaintenanceBtn" class="btn btn-primary btn-sm">+ Registrar mantenimiento</button>
+        </div>
+        <div id="maintenanceDueBanner" class="maintenance-due-banner"></div>
+        <div class="panel">
+          <table class="data-table">
+            <thead>
+              <tr><th>Vehículo</th><th>Tipo</th><th>Realizado</th><th>Próximo vencimiento</th><th>Km. de servicio</th><th>Notas</th></tr>
+            </thead>
+            <tbody id="maintenanceTableBody">
+              <tr class="empty-row"><td colspan="6">Cargando historial…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- TAB: Alertas -->
+      <section id="tab-alerts" class="tab-panel">
+        <div class="panel-toolbar">
+          <h2>Alertas de viaje <span class="text-muted text-sm">— reportadas por operadores</span></h2>
+        </div>
+        <div class="panel">
+          <table class="data-table">
+            <thead>
+              <tr><th>Ruta</th><th>Tipo</th><th>Descripción</th><th>Retraso</th><th>Estado</th><th>Reportada</th><th></th></tr>
+            </thead>
+            <tbody id="alertsTableBody">
+              <tr class="empty-row"><td colspan="7">Cargando alertas…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- TAB: Auditoría -->
+      <section id="tab-audit" class="tab-panel">
+        <div class="panel-toolbar">
+          <h2>Registro de auditoría <span class="text-muted text-sm">— patrón Singleton (FleetAuditLogger)</span></h2>
+          <button id="refreshAuditBtn" class="btn btn-secondary btn-sm">↻ Actualizar</button>
+        </div>
+        <div class="panel">
+          <table class="data-table">
+            <thead><tr><th>Fecha / hora (UTC)</th><th>Categoría</th><th>Mensaje</th><th>Usuario</th></tr></thead>
+            <tbody id="auditTableBody">
+              <tr class="empty-row"><td colspan="4">Cargando auditoría…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+    </main>
+  </div>
+</div>
+
+<div id="modalRoot"></div>
+<div id="toastStack" class="toast-stack"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="js/api.js"></script>
+<script src="js/auth.js"></script>
+<script src="js/dashboard.js"></script>
+</body>
+</html>

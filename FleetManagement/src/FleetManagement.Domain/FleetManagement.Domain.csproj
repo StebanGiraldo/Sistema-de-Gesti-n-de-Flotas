@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>FleetManagement.Domain</RootNamespace>
+    <LangVersion>12.0</LangVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- NetTopologySuite provee el tipo Point usado para coordenadas espaciales,
+         compatible de forma nativa con PostgreSQL + PostGIS cuando se reemplacen
+         los repositorios en memoria por Entity Framework Core. -->
+    <PackageReference Include="NetTopologySuite" Version="2.5.0" />
+  </ItemGroup>
+
+</Project>

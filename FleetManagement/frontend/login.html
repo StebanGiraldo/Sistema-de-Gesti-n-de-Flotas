@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>FleetControl · Iniciar sesión</title>
+<link rel="stylesheet" href="css/styles.css" />
+<style>
+  .login-screen {
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    overflow: hidden;
+    padding: 20px;
+  }
+  .login-screen::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='800' height='600' viewBox='0 0 800 600'%3E%3Cpath d='M-20 500 Q 200 380 320 420 T 620 300 T 900 180' stroke='%232dd4bf' stroke-width='1.5' fill='none' stroke-dasharray='2 10' opacity='0.35'/%3E%3Ccircle cx='320' cy='420' r='4' fill='%232dd4bf' opacity='0.5'/%3E%3Ccircle cx='620' cy='300' r='4' fill='%234c8dff' opacity='0.5'/%3E%3Cpath d='M-40 120 Q 180 60 380 140 T 780 60' stroke='%234c8dff' stroke-width='1.5' fill='none' stroke-dasharray='2 10' opacity='0.25'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: cover;
+    pointer-events: none;
+  }
+  .login-card {
+    position: relative;
+    z-index: 1;
+    width: 100%;
+    max-width: 380px;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border-soft);
+    border-radius: var(--radius-lg);
+    padding: 32px 30px;
+    box-shadow: var(--shadow-panel);
+  }
+  .login-brand { margin-bottom: 4px; }
+  .login-title { font-size: 20px; margin-top: 18px; margin-bottom: 4px; }
+  .login-subtitle { color: var(--color-text-muted); font-size: 13px; margin-bottom: 26px; }
+  .login-error {
+    background: rgba(240, 84, 106, 0.12);
+    border: 1px solid rgba(240, 84, 106, 0.3);
+    color: var(--status-outofservice);
+    border-radius: var(--radius-sm);
+    padding: 10px 12px;
+    font-size: 12.5px;
+    margin-bottom: 16px;
+  }
+  .demo-box {
+    margin-top: 22px;
+    padding: 14px 16px;
+    border-radius: var(--radius-sm);
+    background: var(--color-surface-raised);
+    border: 1px solid var(--color-border-soft);
+    font-size: 12px;
+    color: var(--color-text-muted);
+    line-height: 1.7;
+  }
+  .demo-box strong { color: var(--color-text); }
+  .demo-row { display: flex; justify-content: space-between; }
+  .demo-row button {
+    background: none; border: none; color: var(--color-accent);
+    font-size: 11.5px; font-weight: 600; cursor: pointer; padding: 0;
+  }
+</style>
+</head>
+<body>
+
+<div class="login-screen">
+  <div class="login-card">
+    <div class="brand login-brand">
+      <div class="brand-mark">🚚</div>
+      <div>
+        FleetControl
+        <div class="brand-sub">Sistema de Gestión de Flotas</div>
+      </div>
+    </div>
+
+    <h1 class="login-title">Iniciar sesión</h1>
+    <p class="login-subtitle">Panel administrativo y portal de operadores</p>
+
+    <div id="loginError" class="login-error hidden"></div>
+
+    <form id="loginForm">
+      <div class="field">
+        <label for="username">Usuario</label>
+        <input type="text" id="username" name="username" placeholder="admin" autocomplete="username" required />
+      </div>
+      <div class="field">
+        <label for="password">Contraseña</label>
+        <input type="password" id="password" name="password" placeholder="••••••••" autocomplete="current-password" required />
+      </div>
+      <button type="submit" id="loginBtn" class="btn btn-primary btn-block">Ingresar</button>
+    </form>
+
+    <div class="demo-box">
+      <div class="demo-row">
+        <span><strong>Administrador:</strong> admin / Admin123!</span>
+        <button type="button" data-user="admin" data-pass="Admin123!">Usar</button>
+      </div>
+      <div class="demo-row">
+        <span><strong>Operador:</strong> operador1 / Operador123!</span>
+        <button type="button" data-user="operador1" data-pass="Operador123!">Usar</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="js/api.js"></script>
+<script src="js/auth.js"></script>
+<script>
+  document.querySelectorAll('.demo-row button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.getElementById('username').value = btn.dataset.user;
+      document.getElementById('password').value = btn.dataset.pass;
+    });
+  });
+
+  const form = document.getElementById('loginForm');
+  const errorEl = document.getElementById('loginError');
+  const loginBtn = document.getElementById('loginBtn');
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    errorEl.classList.add('hidden');
+    loginBtn.disabled = true;
+    loginBtn.textContent = 'Ingresando…';
+
+    const username = document.getElementById('username').value.trim();
+    const password = document.getElementById('password').value;
+
+    try {
+      const result = await FleetAPI.login(username, password);
+      saveSession(result);
+      window.location.href = result.role === 'Admin' ? 'dashboard.html' : 'operator.html';
+    } catch (err) {
+      errorEl.textContent = err.message || 'No se pudo iniciar sesión. Verifique el backend en ' + API_BASE_URL;
+      errorEl.classList.remove('hidden');
+      loginBtn.disabled = false;
+      loginBtn.textContent = 'Ingresar';
+    }
+  });
+
+  // Si ya hay una sesión activa, redirige directamente.
+  (function redirectIfLoggedIn() {
+    const token = sessionStorage.getItem('fleet_token');
+    const role = sessionStorage.getItem('fleet_role');
+    if (token && role) {
+      window.location.href = role === 'Admin' ? 'dashboard.html' : 'operator.html';
+    }
+  })();
+</script>
+</body>
+</html>
