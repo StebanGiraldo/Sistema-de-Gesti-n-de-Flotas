@@ -31,6 +31,7 @@ Operador), un dashboard administrativo y un portal para conductores.
 9. [Documentación de la API REST](#9-documentación-de-la-api-rest)
 10. [Notas sobre paso a producción](#10-notas-sobre-paso-a-producción)
 11. [Limitaciones conocidas del prototipo](#11-limitaciones-conocidas-del-prototipo)
+12. [Pruebas automatizadas y cómo demostrar el Factory Method](#12-pruebas-automatizadas-y-cómo-demostrar-el-factory-method)
 
 ---
 
@@ -132,6 +133,11 @@ FleetManagementSystem/
 │       ├── Controllers/ (8 controladores REST)
 │       ├── Middleware/TokenAuthenticationMiddleware.cs
 │       └── Filters/RequireRoleAttribute.cs
+│
+├── tests/
+│   └── FleetManagement.Application.Tests/     ← pruebas xUnit del Factory Method (sección 12)
+│       └── Factories/ (VehicleFactoryTests, VehicleFactoryProviderTests,
+│                       VehicleServiceFactoryMethodTests)
 │
 └── frontend/
     ├── login.html
@@ -591,3 +597,58 @@ para mantenerlo simple, y quedan documentadas aquí para quien continúe el proy
   registrados manualmente en cada `MaintenanceRecord`; no hay integración con
   telemetría real del vehículo para el kilometraje actual (se actualiza junto
   con la simulación de movimiento).
+
+---
+
+## 12. Pruebas automatizadas y cómo demostrar el Factory Method
+
+Además de la explicación y el código de la [sección 8.2](#82-factory-method--fábricas-de-vehículos),
+el proyecto incluye un quinto proyecto —**`tests/FleetManagement.Application.Tests`**—
+con pruebas unitarias **xUnit** que demuestran objetivamente que el patrón
+Factory Method funciona, en tres niveles:
+
+| Archivo | Qué demuestra |
+|---------|----------------|
+| `Factories/VehicleFactoryTests.cs` | Cada fábrica concreta (`TruckFactory`, `VanFactory`, `CarFactory`, `MotorcycleFactory`) produce un `Vehicle` con el `Type` y la `CapacityKg` correctos para su categoría. |
+| `Factories/VehicleFactoryProviderTests.cs` | `VehicleFactoryProvider.GetFactory(tipo)` devuelve **polimórficamente** la fábrica concreta correcta para cada `VehicleType` —sin ningún `switch`/`if` en el código cliente— y lanza `NotSupportedException` si un tipo no tiene fábrica registrada. |
+| `Factories/VehicleServiceFactoryMethodTests.cs` | El caso de uso completo (`VehicleService.CreateVehicleAsync`, el mismo que invoca `POST /api/fleet/vehicles`) delega correctamente en el Factory Method y devuelve la capacidad correcta según el tipo solicitado; también cubre los caminos de error (tipo inválido, placa duplicada). |
+
+### Ejecutar las pruebas
+
+```bash
+cd FleetManagementSystem
+dotnet test
+```
+
+(el proyecto de pruebas ya está registrado en `FleetManagementSystem.sln`, así
+que `dotnet test` en la raíz lo encuentra solo; también puede apuntarlo
+explícitamente con `dotnet test tests/FleetManagement.Application.Tests`).
+
+Salida esperada (resumen):
+
+```
+Aprobado! - Con error: 0, Superado: 20, Omitido: 0, Total: 20
+```
+
+> Si `dotnet restore` se queja de no encontrar la versión exacta de `xunit`,
+> `xunit.runner.visualstudio` o `Microsoft.NET.Test.Sdk` indicada en el
+> `.csproj`, ejecute `dotnet add package xunit` (sin especificar versión)
+> dentro de `tests/FleetManagement.Application.Tests` para que tome la
+> última disponible en su máquina; el código de las pruebas no depende de
+> ninguna versión concreta.
+
+### Demostración manual / en vivo (sin correr pruebas)
+
+Para una presentación en vivo, la forma más rápida de evidenciar el patrón es
+mostrar que **el mismo endpoint produce objetos distintos según el tipo**, sin
+que el controlador ni el servicio tengan un `switch` visible:
+
+1. Ejecute el backend (`dotnet run --project src/FleetManagement.Api`) y abra `http://localhost:5080/swagger`.
+2. Expanda `POST /api/fleet/vehicles`, use **"Try it out"** y envíe:
+   ```json
+   { "licensePlate": "DEMO-1", "brand": "Marca", "model": "Modelo", "year": 2024, "type": "Truck", "latitude": 7.1, "longitude": -73.1 }
+   ```
+   Observe en la respuesta `"capacityKg": 8000`.
+3. Repita el envío cambiando sólo `"type": "Motorcycle"` (y la placa a `DEMO-2`). Observe `"capacityKg": 30`.
+4. Esa diferencia de capacidad, obtenida del mismo endpoint sin lógica condicional visible, es la evidencia de que `VehicleFactoryProvider.GetFactory(tipo)` seleccionó una fábrica concreta distinta en cada llamada.
+5. Alternativamente, desde `dashboard.html`, use el botón **"+ Vehículo"**: al crear el vehículo aparece la confirmación *"Vehículo creado (patrones Factory Method + Abstract Factory)"* (ver `frontend/js/dashboard.js`), y puede repetir el paso 2-3 cambiando el campo "Tipo" del formulario para ver la misma diferencia de capacidad reflejada de inmediato en la lista de vehículos.

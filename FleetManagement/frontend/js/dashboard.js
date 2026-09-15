@@ -87,8 +87,8 @@ document.querySelectorAll('.tab-btn').forEach(btn => btn.addEventListener('click
 // ---------------------------------------------------------------------
 function initMap() {
   map = L.map('map', { zoomControl: true }).setView([7.1193, -73.1227], 7);
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+    attribution: '&copy; OpenStreetMap contributors &copy; CARTO',
     maxZoom: 19
   }).addTo(map);
 }
