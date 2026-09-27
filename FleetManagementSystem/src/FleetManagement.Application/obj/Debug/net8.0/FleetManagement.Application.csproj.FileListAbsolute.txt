@@ -1,0 +1,15 @@
+C:\Users\user\Desktop\copia\FleetManagementSystem\src\FleetManagement.Application\bin\Debug\net8.0\FleetManagement.Application.deps.json
+C:\Users\user\Desktop\copia\FleetManagementSystem\src\FleetManagement.Application\bin\Debug\net8.0\FleetManagement.Application.dll
+C:\Users\user\Desktop\copia\FleetManagementSystem\src\FleetManagement.Application\bin\Debug\net8.0\FleetManagement.Application.pdb
+C:\Users\user\Desktop\copia\FleetManagementSystem\src\FleetManagement.Application\bin\Debug\net8.0\FleetManagement.Domain.dll
+C:\Users\user\Desktop\copia\FleetManagementSystem\src\FleetManagement.Application\bin\Debug\net8.0\FleetManagement.Domain.pdb
+C:\Users\user\Desktop\copia\FleetManagementSystem\src\FleetManagement.Application\obj\Debug\net8.0\FleetManagement.Application.csproj.AssemblyReference.cache
+C:\Users\user\Desktop\copia\FleetManagementSystem\src\FleetManagement.Application\obj\Debug\net8.0\FleetManagement.Application.GeneratedMSBuildEditorConfig.editorconfig
+C:\Users\user\Desktop\copia\FleetManagementSystem\src\FleetManagement.Application\obj\Debug\net8.0\FleetManagement.Application.AssemblyInfoInputs.cache
+C:\Users\user\Desktop\copia\FleetManagementSystem\src\FleetManagement.Application\obj\Debug\net8.0\FleetManagement.Application.AssemblyInfo.cs
+C:\Users\user\Desktop\copia\FleetManagementSystem\src\FleetManagement.Application\obj\Debug\net8.0\FleetManagement.Application.csproj.CoreCompileInputs.cache
+C:\Users\user\Desktop\copia\FleetManagementSystem\src\FleetManagement.Application\obj\Debug\net8.0\FleetMan.76398095.Up2Date
+C:\Users\user\Desktop\copia\FleetManagementSystem\src\FleetManagement.Application\obj\Debug\net8.0\FleetManagement.Application.dll
+C:\Users\user\Desktop\copia\FleetManagementSystem\src\FleetManagement.Application\obj\Debug\net8.0\refint\FleetManagement.Application.dll
+C:\Users\user\Desktop\copia\FleetManagementSystem\src\FleetManagement.Application\obj\Debug\net8.0\FleetManagement.Application.pdb
+C:\Users\user\Desktop\copia\FleetManagementSystem\src\FleetManagement.Application\obj\Debug\net8.0\ref\FleetManagement.Application.dll
