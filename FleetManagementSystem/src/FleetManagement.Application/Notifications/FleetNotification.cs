@@ -18,8 +18,13 @@ namespace FleetManagement.Application.Notifications;
 /// Cada especialización (Refined Abstraction) sólo decide QUÉ se envía
 /// (destinatario, asunto, cuerpo, construidos a partir de datos de dominio);
 /// el CÓMO se envía queda completamente delegado en <see cref="Channel"/>.
+///
+/// Implementa también <see cref="INotification"/>, el contrato común (Component
+/// del patrón DECORATOR) que permite envolver cualquier notificación con
+/// decoradores sin modificar sus subclases. Es el único cambio hecho a esta
+/// clase al incorporar Decorator: no altera ningún comportamiento del Bridge.
 /// </summary>
-public abstract class FleetNotification
+public abstract class FleetNotification : INotification
 {
     /// <summary>
     /// El Implementor (Bridge): a quién se le delega el envío. Las

@@ -3,6 +3,7 @@ using FleetManagement.Application.Interfaces;
 using FleetManagement.Application.Interfaces.Repositories;
 using FleetManagement.Application.Interfaces.Services;
 using FleetManagement.Application.Notifications;
+using FleetManagement.Application.Notifications.Decorators;
 using FleetManagement.Domain.Entities;
 using FleetManagement.Domain.Enums;
 
@@ -113,7 +114,13 @@ public class MaintenanceService : IMaintenanceService
             saved.NextDueDate,
             saved.NextDueMileageKm);
 
-        await notification.SendAsync();
+        // PATRÓN DECORATOR: la notificación (abstracción del Bridge) se envuelve con
+        // prioridad, reintentos y auditoría sin modificar sus clases ni el canal.
+        await notification
+            .WithPriority(NotificationPriority.Normal)
+            .WithRetry()
+            .WithAudit(_auditLogger)
+            .SendAsync();
     }
 
     /// <summary>

@@ -3,6 +3,7 @@ using FleetManagement.Application.Interfaces;
 using FleetManagement.Application.Interfaces.Repositories;
 using FleetManagement.Application.Interfaces.Services;
 using FleetManagement.Application.Notifications;
+using FleetManagement.Application.Notifications.Decorators;
 using FleetManagement.Domain.Entities;
 using FleetManagement.Domain.Enums;
 
@@ -90,7 +91,13 @@ public class TripAlertService : ITripAlertService
             type.ToString(),
             request.Description,
             alert.DelayMinutes);
-        await notification.SendAsync();
+        // PATRÓN DECORATOR: la prioridad se deriva del tipo real de incidencia; el envío
+        // se reintenta según esa prioridad y queda auditado (ver Application/Notifications/Decorators).
+        await notification
+            .WithPriority(PriorityFor(type))
+            .WithRetry()
+            .WithAudit(_auditLogger)
+            .SendAsync();
 
         return MapToDto(saved, new List<DeliveryRoute> { route });
     }
@@ -106,6 +113,15 @@ public class TripAlertService : ITripAlertService
 
         _auditLogger.LogEvent("Alerta", $"Alerta {alert.Id} marcada como resuelta.");
     }
+
+    /// <summary>Accidente = crítica, avería = alta, otro = baja; retraso, tráfico y clima = normal.</summary>
+    private static NotificationPriority PriorityFor(AlertType type) => type switch
+    {
+        AlertType.Accident => NotificationPriority.Critical,
+        AlertType.Breakdown => NotificationPriority.High,
+        AlertType.Other => NotificationPriority.Low,
+        _ => NotificationPriority.Normal
+    };
 
     private static TripAlertDto MapToDto(TripAlert a, IReadOnlyList<DeliveryRoute> routes)
     {

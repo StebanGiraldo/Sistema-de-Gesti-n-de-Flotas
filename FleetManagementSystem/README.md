@@ -21,13 +21,14 @@ Operador), un dashboard administrativo y un portal para conductores.
 5. [Cómo ejecutar el proyecto](#5-cómo-ejecutar-el-proyecto)
 6. [Credenciales de demostración](#6-credenciales-de-demostración)
 7. [Principios SOLID aplicados](#7-principios-solid-aplicados)
-8. [Patrones de diseño creacionales](#8-patrones-de-diseño-creacionales)
+8. [Patrones de diseño](#8-patrones-de-diseño)
    - [8.1 Singleton — `FleetAuditLogger`](#81-singleton--fleetauditlogger)
    - [8.2 Factory Method — Fábricas de vehículos](#82-factory-method--fábricas-de-vehículos)
    - [8.3 Abstract Factory — Fábrica de incorporación de flota](#83-abstract-factory--fábrica-de-incorporación-de-flota)
    - [8.4 Builder — Constructor de rutas](#84-builder--constructor-de-rutas)
    - [8.5 Prototype — Clonación de vehículos y rutas](#85-prototype--clonación-de-vehículos-y-rutas)
    - [8.6 Resumen de ubicaciones](#86-resumen-de-ubicaciones-de-los-patrones)
+   - [8.7 Patrones estructurales: Adapter, Bridge, Composite y Decorator](#87-patrones-estructurales-adapter-bridge-composite-y-decorator)
 9. [Documentación de la API REST](#9-documentación-de-la-api-rest)
 10. [Notas sobre paso a producción](#10-notas-sobre-paso-a-producción)
 11. [Limitaciones conocidas del prototipo](#11-limitaciones-conocidas-del-prototipo)
@@ -223,7 +224,7 @@ iteraciones, sal aleatoria por usuario) — ver `Infrastructure/Security/Passwor
 
 ---
 
-## 8. Patrones de diseño creacionales
+## 8. Patrones de diseño
 
 Los cinco patrones solicitados están implementados, **conectados a un caso de uso
 real** (no como código de ejemplo aislado) y expuestos a través de la API y la
@@ -501,6 +502,37 @@ pasan de "volver a diligenciar todos los campos" a "clonar y ajustar dos datos".
 | Abstract Factory (`IFleetOnboardingAbstractFactory`) | `POST /api/fleet/vehicles` (mismo endpoint, un paso después del Factory Method) | "+ Vehículo" |
 | Builder (`IDeliveryRouteBuilder` + `DeliveryRouteDirector`) | `POST /api/routes` y `POST /api/routes/express` | "+ Nueva ruta" / "⚡ Ruta express" |
 | Prototype (`IPrototype<T>`) | `POST /api/fleet/vehicles/{id}/clone` y `POST /api/routes/{id}/duplicate` | ⧉ junto a cada vehículo / ruta |
+| Adapter (`INavigationProvider` + `GoogleMapsAdapter`) | `GET /api/navigation/route/{routeId}` | Enlace de navegación de la ruta |
+| Bridge (`FleetNotification` + `INotificationChannel`) | `POST /api/maintenance`, `POST /api/alerts`, `PATCH /api/fleet/vehicles/{id}/status` (el envío simulado aparece en la consola del backend) | — |
+| Composite (`ICargoComponent` / `CargoGroup`) | `GET /api/routes/{id}/cargo-manifest` | — |
+| Decorator (`NotificationDecorator`: Audit, Retry, Priority) | Los mismos endpoints que el Bridge; el resultado queda en `GET /api/audit/logs` | Pestaña "Auditoría" |
+
+### 8.7 Patrones estructurales: Adapter, Bridge, Composite y Decorator
+
+| Patrón | Dónde está | Qué resuelve |
+|--------|------------|--------------|
+| **Adapter** | `Application/Interfaces/INavigationProvider` (Target), `Infrastructure/Navigation/GoogleMapsAdapter` (Adapter), `GoogleMapsApi` (Adaptee); cliente: `NavigationService` | Desacopla la navegación de Google Maps: integrar otro proveedor sólo requiere otro adapter. |
+| **Bridge** | `Application/Notifications/FleetNotification` y sus especializaciones (`Maintenance`, `TripAlert`, `Vehicle`); `Interfaces/INotificationChannel` y los canales Email/SMS/Push en `Infrastructure/Notifications` | Separa *qué* se notifica de *por dónde* se envía, sin una clase por cada combinación. |
+| **Composite** | `Domain/Cargo/` (`ICargoComponent`, `CargoItemComponent`, `CargoGroup`, `CargoManifest`), `Application/Services/CargoManifestService`, `Api/Controllers/CargoManifestController` | Trata de forma uniforme un artículo de carga y grupos de cargas anidados: manifiesto de la ruta agrupado por prioridad, con pesos y volúmenes totales. |
+| **Decorator** | `Application/Notifications/INotification` y `Application/Notifications/Decorators/` (`Audit`, `Retry`, `Priority`) | Añade auditoría, reintentos y prioridad a una notificación sin modificar sus clases ni el canal. |
+
+Los cuatro conviven con los patrones creacionales sin reemplazarlos: el Composite sólo
+**lee** las rutas que construyen Builder y Prototype (`CargoItem` no se modificó; la hoja
+`CargoItemComponent` lo envuelve), y el Decorator **envuelve** la notificación del Bridge
+(el único cambio en esas clases es que `FleetNotification` implementa `INotification`).
+
+Ejemplo de Bridge + Decorator, tal como lo usan `MaintenanceService`, `TripAlertService` y `VehicleService`:
+
+```csharp
+await new MaintenanceNotification(channel, recipient, plate, type, dueDate, dueKm) // Bridge: qué + por qué canal
+    .WithPriority(NotificationPriority.Normal)   // Decorator: prioridad (también decide cuántos reintentos)
+    .WithRetry()                                 // Decorator: reintenta si el canal falla
+    .WithAudit(auditLogger)                      // Decorator: registra resultado y errores en la bitácora
+    .SendAsync();
+```
+
+Orden recomendado: `Priority` dentro de `Retry`, y `Retry` dentro de `Audit` (el primero que se
+escribe queda más adentro). Detalle y diagramas en la documentación técnica de la integración.
 
 ---
 
@@ -522,6 +554,7 @@ correr el backend. Resumen de endpoints:
 | GET | `/api/routes` | Lista de rutas | — |
 | GET | `/api/routes/{id}` | Detalle de una ruta | — |
 | GET | `/api/routes/driver/{driverId}` | Rutas asignadas a un conductor | — |
+| GET | `/api/routes/{id}/cargo-manifest` | Manifiesto jerárquico de la carga de una ruta (Composite) | — |
 | POST | `/api/routes` | Crea una ruta (Builder) | Admin |
 | POST | `/api/routes/express` | Crea una ruta express (Builder + Director) | Admin |
 | POST | `/api/routes/{id}/duplicate` | Duplica una ruta (Prototype) | Admin |

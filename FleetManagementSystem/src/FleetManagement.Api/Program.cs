@@ -133,6 +133,10 @@ builder.Services.AddScoped<ITripAlertService, TripAlertService>();
 builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<INavigationService, NavigationService>();
 
+// --- COMPOSITE (patrón estructural): el manifiesto de carga de una ruta se expone como
+//     un árbol de CargoGroup/CargoItemComponent (ver FleetManagement.Domain.Cargo). ---
+builder.Services.AddScoped<ICargoManifestService, CargoManifestService>();
+
 // --- Simulación de movimiento en tiempo real (monitoreo en tiempo real, requerimiento #1) ---
 builder.Services.AddHostedService<VehicleSimulationBackgroundService>();
 

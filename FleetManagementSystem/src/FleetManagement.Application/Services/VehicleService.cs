@@ -4,6 +4,7 @@ using FleetManagement.Application.Interfaces;
 using FleetManagement.Application.Interfaces.Repositories;
 using FleetManagement.Application.Interfaces.Services;
 using FleetManagement.Application.Notifications;
+using FleetManagement.Application.Notifications.Decorators;
 using FleetManagement.Domain.Entities;
 using FleetManagement.Domain.Enums;
 
@@ -154,8 +155,22 @@ public class VehicleService : IVehicleService
             previousStatus.ToString(),
             newStatus.ToString());
 
-        await notification.SendAsync();
+        // PATRÓN DECORATOR: la prioridad se deriva del nuevo estado del vehículo; el envío
+        // se reintenta según esa prioridad y queda auditado.
+        await notification
+            .WithPriority(PriorityFor(newStatus))
+            .WithRetry()
+            .WithAudit(_auditLogger)
+            .SendAsync();
     }
+
+    /// <summary>Fuera de servicio = alta, en mantenimiento = normal; disponible o en ruta = baja.</summary>
+    private static NotificationPriority PriorityFor(VehicleStatus status) => status switch
+    {
+        VehicleStatus.OutOfService => NotificationPriority.High,
+        VehicleStatus.Maintenance => NotificationPriority.Normal,
+        _ => NotificationPriority.Low
+    };
 
     private static VehicleDto MapToDto(Vehicle v, IReadOnlyList<Driver> drivers)
     {
