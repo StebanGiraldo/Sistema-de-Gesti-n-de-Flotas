@@ -1,9 +1,11 @@
 using FleetManagement.Api.Middleware;
 using FleetManagement.Application.Builders;
+using FleetManagement.Application.Facades;
 using FleetManagement.Application.Factories;
 using FleetManagement.Application.Interfaces;
 using FleetManagement.Application.Interfaces.Repositories;
 using FleetManagement.Application.Interfaces.Services;
+using FleetManagement.Application.Reports;
 using FleetManagement.Application.Services;
 using FleetManagement.Infrastructure.BackgroundServices;
 using FleetManagement.Infrastructure.Logging;
@@ -136,6 +138,17 @@ builder.Services.AddScoped<INavigationService, NavigationService>();
 // --- COMPOSITE (patrón estructural): el manifiesto de carga de una ruta se expone como
 //     un árbol de CargoGroup/CargoItemComponent (ver FleetManagement.Domain.Cargo). ---
 builder.Services.AddScoped<ICargoManifestService, CargoManifestService>();
+
+// --- DECORATOR de reportes (patrón estructural): IFleetReportGenerator es el Componente y se registra SOLO el
+//     generador base. Los decoradores (estadísticas, alertas de mantenimiento, resumen de carga) no se registran:
+//     FleetReportService los apila en cada petición según las secciones que pida el cliente. Es independiente del
+//     Decorator de notificaciones (Application/Notifications/Decorators). ---
+builder.Services.AddScoped<IFleetReportGenerator, FleetReportGenerator>();
+builder.Services.AddScoped<IFleetReportService, FleetReportService>();
+
+// --- FACADE (patrón estructural): punto de entrada único al resumen del dashboard. Coordina los servicios de
+//     vehículos, rutas, mantenimiento y alertas sin reemplazarlos. ---
+builder.Services.AddScoped<IFleetDashboardFacade, FleetDashboardFacade>();
 
 // --- Simulación de movimiento en tiempo real (monitoreo en tiempo real, requerimiento #1) ---
 builder.Services.AddHostedService<VehicleSimulationBackgroundService>();

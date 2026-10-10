@@ -1,8 +1,8 @@
 {
   "version": 2,
-  "dgSpecHash": "h3/MP2MKGOk=",
+  "dgSpecHash": "9WmEyurhJSA=",
   "success": true,
-  "projectFilePath": "C:\\Users\\user\\Desktop\\copia\\FleetManagementSystem\\src\\FleetManagement.Application\\FleetManagement.Application.csproj",
+  "projectFilePath": "C:\\Users\\user\\Desktop\\copia 2\\FleetManagementSystem\\src\\FleetManagement.Application\\FleetManagement.Application.csproj",
   "expectedPackageFiles": [
     "C:\\Users\\user\\.nuget\\packages\\nettopologysuite\\2.5.0\\nettopologysuite.2.5.0.nupkg.sha512",
     "C:\\Users\\user\\.nuget\\packages\\system.memory\\4.5.4\\system.memory.4.5.4.nupkg.sha512"

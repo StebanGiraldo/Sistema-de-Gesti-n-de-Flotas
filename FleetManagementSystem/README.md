@@ -29,6 +29,7 @@ Operador), un dashboard administrativo y un portal para conductores.
    - [8.5 Prototype — Clonación de vehículos y rutas](#85-prototype--clonación-de-vehículos-y-rutas)
    - [8.6 Resumen de ubicaciones](#86-resumen-de-ubicaciones-de-los-patrones)
    - [8.7 Patrones estructurales: Adapter, Bridge, Composite y Decorator](#87-patrones-estructurales-adapter-bridge-composite-y-decorator)
+   - [8.8 Decorator de reportes y Facade del resumen](#88-decorator-de-reportes-y-facade-del-resumen)
 9. [Documentación de la API REST](#9-documentación-de-la-api-rest)
 10. [Notas sobre paso a producción](#10-notas-sobre-paso-a-producción)
 11. [Limitaciones conocidas del prototipo](#11-limitaciones-conocidas-del-prototipo)
@@ -121,6 +122,9 @@ FleetManagementSystem/
 │   │   ├── DTOs/ (records de entrada/salida de la API)
 │   │   ├── Factories/  ← FACTORY METHOD + ABSTRACT FACTORY
 │   │   ├── Builders/   ← BUILDER
+│   │   ├── Reports/    ← DECORATOR de reportes (generador base + decoradores, sección 8.8)
+│   │   ├── Facades/    ← FACADE del resumen del dashboard (sección 8.8)
+│   │   ├── Metrics/    ← FleetMetrics: cálculos que comparten el reporte y el resumen
 │   │   └── Services/   (7 servicios: casos de uso)
 │   │
 │   ├── FleetManagement.Infrastructure/
@@ -506,6 +510,8 @@ pasan de "volver a diligenciar todos los campos" a "clonar y ajustar dos datos".
 | Bridge (`FleetNotification` + `INotificationChannel`) | `POST /api/maintenance`, `POST /api/alerts`, `PATCH /api/fleet/vehicles/{id}/status` (el envío simulado aparece en la consola del backend) | — |
 | Composite (`ICargoComponent` / `CargoGroup`) | `GET /api/routes/{id}/cargo-manifest` | — |
 | Decorator (`NotificationDecorator`: Audit, Retry, Priority) | Los mismos endpoints que el Bridge; el resultado queda en `GET /api/audit/logs` | Pestaña "Auditoría" |
+| Decorator de reportes (`FleetReportDecorator`: Statistics, MaintenanceAlerts, CargoSummary) | `GET /api/reports/fleet?sections=...` | — |
+| Facade (`FleetDashboardFacade`) | `GET /api/dashboard/summary` | — |
 
 ### 8.7 Patrones estructurales: Adapter, Bridge, Composite y Decorator
 
@@ -533,6 +539,48 @@ await new MaintenanceNotification(channel, recipient, plate, type, dueDate, dueK
 
 Orden recomendado: `Priority` dentro de `Retry`, y `Retry` dentro de `Audit` (el primero que se
 escribe queda más adentro). Detalle y diagramas en la documentación técnica de la integración.
+
+### 8.8 Decorator de reportes y Facade del resumen
+
+Se agregaron **de forma aditiva**: ningún patrón anterior se reemplazó ni se reescribió. El único archivo
+existente que cambió en `src/` es `Program.cs` (dos `using` y tres registros de DI); todo lo demás es código nuevo.
+
+| Patrón | Dónde está | Qué resuelve |
+|--------|------------|--------------|
+| **Decorator (reportes)** | `Application/Reports/` (`IFleetReportGenerator` = Componente, `FleetReportGenerator` = Componente concreto), `Application/Reports/Decorators/` (`FleetReportDecorator` = Decorador base; `StatisticsReportDecorator`, `MaintenanceAlertsReportDecorator`, `CargoSummaryReportDecorator`), `Application/Services/FleetReportService`, `Api/Controllers/ReportsController` | Añade secciones opcionales a un reporte base (vehículos y rutas) sin modificar el generador base ni las demás secciones, y en el orden que pida el cliente. |
+| **Facade** | `Application/Facades/` (`IFleetDashboardFacade`, `FleetDashboardFacade`), `Api/Controllers/DashboardController` | Una sola llamada coordina los servicios de vehículos, rutas, mantenimiento y alertas para armar el resumen del dashboard; los servicios siguen siendo la única fuente de cada dato. |
+
+Es independiente del Decorator de notificaciones de la sección 8.7 (otro componente, otras clases). Las cifras que
+comparten el reporte y el resumen —estadísticas, totales de carga, mantenimientos vencidos y conteo por estado— se
+calculan en un único lugar, `Application/Metrics/FleetMetrics`, para que ambos den exactamente los mismos números
+sin repetir lógica. Los datos salen siempre de los servicios y repositorios existentes: no se inventó ningún campo.
+
+```csharp
+// El primero que se escribe queda más adentro (igual que en el Decorator de notificaciones).
+IFleetReportGenerator report =
+    new CargoSummaryReportDecorator(
+        new MaintenanceAlertsReportDecorator(
+            new StatisticsReportDecorator(baseGenerator), maintenanceService));
+FleetReportDto dto = await report.GenerateAsync();
+```
+
+En la API, `FleetReportService` arma esa cadena en cada petición según `sections`; en DI sólo está registrado
+el generador base.
+
+| Endpoint | Resultado |
+|----------|-----------|
+| `GET /api/reports/fleet` | Reporte base: `metadata`, `vehicles` y `routes`. |
+| `GET /api/reports/fleet?sections=Statistics,MaintenanceAlerts,CargoSummary` | Lo anterior más `statistics`, `maintenanceAlerts` y `cargoSummary`. Las secciones pueden ir separadas por comas o repetirse (`sections=A&sections=B`), sin distinguir mayúsculas. Una sección desconocida (o un número) devuelve `400` con `{ "message": ... }` que lista los valores válidos. |
+| `GET /api/dashboard/summary` | `generatedAtUtc`, `statistics`, `cargo`, `overdueMaintenanceCount` y `alertsByStatus`. |
+
+Límites a tener en cuenta:
+
+- El módulo de mantenimiento sólo expone los elementos **vencidos**; el modelo no tiene un concepto de «pendientes» o
+  «próximos», así que no se muestran (no se inventaron).
+- Añadir un decorador que aporte un tipo de sección **nuevo** exige una propiedad anulable en `FleetReportDto`, un valor
+  en `ReportSection` y una línea en el `switch` de `FleetReportService`; el generador base y los demás decoradores no cambian.
+- Los dos endpoints son de sólo lectura y, como el resto de las consultas `GET`, no exigen rol (ver sección 9).
+- El frontend todavía no consume estos endpoints: se pueden probar con Swagger o `curl`.
 
 ---
 
@@ -569,6 +617,8 @@ correr el backend. Resumen de endpoints:
 | PATCH | `/api/alerts/{id}/resolve` | Marca una alerta como resuelta | Admin |
 | GET | `/api/navigation/route/{routeId}` | Enlace de navegación externa (Google Maps) | — |
 | GET | `/api/audit/logs` | Registro de auditoría (Singleton) | Admin |
+| GET | `/api/reports/fleet` | Reporte de la flota (vehículos y rutas). Con `?sections=Statistics,MaintenanceAlerts,CargoSummary` agrega esas secciones (Decorator) | — |
+| GET | `/api/dashboard/summary` | Resumen general de la flota para el dashboard (Facade) | — |
 
 La autorización por rol se implementa con el atributo `[RequireRole(UserRole.Admin)]`
 (`Api/Filters/RequireRoleAttribute.cs`), evaluado sobre el `ClaimsPrincipal` que
@@ -669,6 +719,23 @@ Aprobado! - Con error: 0, Superado: 20, Omitido: 0, Total: 20
 > dentro de `tests/FleetManagement.Application.Tests` para que tome la
 > última disponible en su máquina; el código de las pruebas no depende de
 > ninguna versión concreta.
+
+### Pruebas del Decorator de reportes y del Facade (sección 8.8)
+
+La tabla y la salida de arriba describen sólo las pruebas del Factory Method (20). El mismo proyecto de pruebas
+incluye además las de Builder, Prototype, Adapter, Bridge, Composite y Decorator de notificaciones (143 en total
+con las anteriores) y las de la integración Decorator de reportes + Facade (75 más), de modo que el total esperado
+con todas es de **218** (cada fila de un `[Theory]` cuenta como una prueba). Siguen sin usar librerías de mocking:
+los dobles de prueba están escritos a mano.
+
+| Carpeta | Qué demuestra |
+|---------|----------------|
+| `Metrics/FleetMetricsTests.cs` | Los cálculos compartidos (estadísticas, totales de carga con 3 decimales, vencidos, conteo por estado), incluida la flota vacía sin dividir por cero. |
+| `ReportDecorator/` | El generador base y cada decorador por separado; la composición (combinar, orden libre, intercambiables con el componente, una sola consulta por subsistema); la interpretación de `sections` (mayúsculas, comas, duplicados, errores); y la integración con los servicios reales, que coincide con el manifiesto Composite. |
+| `Facade/` | El resumen con los cuatro servicios sustituidos y con los servicios reales: cifras, una consulta por subsistema, mismas cifras que el reporte, los errores no se ocultan y es de sólo lectura (no cambia datos, no escribe en la bitácora ni envía avisos). |
+| `Support/` | Dobles de prueba de los servicios (`FleetServiceFakes.cs`) y una flota con los servicios reales sobre los repositorios en memoria (`RealFleet.cs`). |
+
+Para ejecutar sólo una parte: `dotnet test --filter "FullyQualifiedName~ReportDecorator"` o `...~Facade`.
 
 ### Demostración manual / en vivo (sin correr pruebas)
 

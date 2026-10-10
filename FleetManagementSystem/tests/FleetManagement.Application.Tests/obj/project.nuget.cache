@@ -1,8 +1,8 @@
 {
   "version": 2,
-  "dgSpecHash": "AOdvgybjtqU=",
+  "dgSpecHash": "AKgKfk17+nM=",
   "success": true,
-  "projectFilePath": "C:\\Users\\user\\Desktop\\copia\\FleetManagementSystem\\tests\\FleetManagement.Application.Tests\\FleetManagement.Application.Tests.csproj",
+  "projectFilePath": "C:\\Users\\user\\Desktop\\copia 2\\FleetManagementSystem\\tests\\FleetManagement.Application.Tests\\FleetManagement.Application.Tests.csproj",
   "expectedPackageFiles": [
     "C:\\Users\\user\\.nuget\\packages\\coverlet.collector\\6.0.2\\coverlet.collector.6.0.2.nupkg.sha512",
     "C:\\Users\\user\\.nuget\\packages\\microsoft.codecoverage\\17.11.1\\microsoft.codecoverage.17.11.1.nupkg.sha512",

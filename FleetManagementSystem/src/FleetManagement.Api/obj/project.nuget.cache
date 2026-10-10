@@ -1,8 +1,8 @@
 {
   "version": 2,
-  "dgSpecHash": "CnvfyxERDQk=",
+  "dgSpecHash": "5Cn0L/iSuS4=",
   "success": true,
-  "projectFilePath": "C:\\Users\\user\\Desktop\\copia\\FleetManagementSystem\\src\\FleetManagement.Api\\FleetManagement.Api.csproj",
+  "projectFilePath": "C:\\Users\\user\\Desktop\\copia 2\\FleetManagementSystem\\src\\FleetManagement.Api\\FleetManagement.Api.csproj",
   "expectedPackageFiles": [
     "C:\\Users\\user\\.nuget\\packages\\microsoft.entityframeworkcore\\8.0.8\\microsoft.entityframeworkcore.8.0.8.nupkg.sha512",
     "C:\\Users\\user\\.nuget\\packages\\microsoft.entityframeworkcore.abstractions\\8.0.8\\microsoft.entityframeworkcore.abstractions.8.0.8.nupkg.sha512",

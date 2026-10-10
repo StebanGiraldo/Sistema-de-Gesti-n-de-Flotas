@@ -2073,11 +2073,11 @@
   "project": {
     "version": "1.0.0",
     "restore": {
-      "projectUniqueName": "C:\\Users\\user\\Desktop\\copia\\FleetManagementSystem\\tests\\FleetManagement.Application.Tests\\FleetManagement.Application.Tests.csproj",
+      "projectUniqueName": "C:\\Users\\user\\Desktop\\copia 2\\FleetManagementSystem\\tests\\FleetManagement.Application.Tests\\FleetManagement.Application.Tests.csproj",
       "projectName": "FleetManagement.Application.Tests",
-      "projectPath": "C:\\Users\\user\\Desktop\\copia\\FleetManagementSystem\\tests\\FleetManagement.Application.Tests\\FleetManagement.Application.Tests.csproj",
+      "projectPath": "C:\\Users\\user\\Desktop\\copia 2\\FleetManagementSystem\\tests\\FleetManagement.Application.Tests\\FleetManagement.Application.Tests.csproj",
       "packagesPath": "C:\\Users\\user\\.nuget\\packages\\",
-      "outputPath": "C:\\Users\\user\\Desktop\\copia\\FleetManagementSystem\\tests\\FleetManagement.Application.Tests\\obj\\",
+      "outputPath": "C:\\Users\\user\\Desktop\\copia 2\\FleetManagementSystem\\tests\\FleetManagement.Application.Tests\\obj\\",
       "projectStyle": "PackageReference",
       "configFilePaths": [
         "C:\\Users\\user\\AppData\\Roaming\\NuGet\\NuGet.Config"
@@ -2092,14 +2092,14 @@
         "net8.0": {
           "targetAlias": "net8.0",
           "projectReferences": {
-            "C:\\Users\\user\\Desktop\\copia\\FleetManagementSystem\\src\\FleetManagement.Application\\FleetManagement.Application.csproj": {
-              "projectPath": "C:\\Users\\user\\Desktop\\copia\\FleetManagementSystem\\src\\FleetManagement.Application\\FleetManagement.Application.csproj"
+            "C:\\Users\\user\\Desktop\\copia 2\\FleetManagementSystem\\src\\FleetManagement.Application\\FleetManagement.Application.csproj": {
+              "projectPath": "C:\\Users\\user\\Desktop\\copia 2\\FleetManagementSystem\\src\\FleetManagement.Application\\FleetManagement.Application.csproj"
             },
-            "C:\\Users\\user\\Desktop\\copia\\FleetManagementSystem\\src\\FleetManagement.Domain\\FleetManagement.Domain.csproj": {
-              "projectPath": "C:\\Users\\user\\Desktop\\copia\\FleetManagementSystem\\src\\FleetManagement.Domain\\FleetManagement.Domain.csproj"
+            "C:\\Users\\user\\Desktop\\copia 2\\FleetManagementSystem\\src\\FleetManagement.Domain\\FleetManagement.Domain.csproj": {
+              "projectPath": "C:\\Users\\user\\Desktop\\copia 2\\FleetManagementSystem\\src\\FleetManagement.Domain\\FleetManagement.Domain.csproj"
             },
-            "C:\\Users\\user\\Desktop\\copia\\FleetManagementSystem\\src\\FleetManagement.Infrastructure\\FleetManagement.Infrastructure.csproj": {
-              "projectPath": "C:\\Users\\user\\Desktop\\copia\\FleetManagementSystem\\src\\FleetManagement.Infrastructure\\FleetManagement.Infrastructure.csproj"
+            "C:\\Users\\user\\Desktop\\copia 2\\FleetManagementSystem\\src\\FleetManagement.Infrastructure\\FleetManagement.Infrastructure.csproj": {
+              "projectPath": "C:\\Users\\user\\Desktop\\copia 2\\FleetManagementSystem\\src\\FleetManagement.Infrastructure\\FleetManagement.Infrastructure.csproj"
             }
           }
         }

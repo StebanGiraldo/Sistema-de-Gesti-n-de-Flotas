@@ -1121,11 +1121,11 @@
   "project": {
     "version": "1.0.0",
     "restore": {
-      "projectUniqueName": "C:\\Users\\user\\Desktop\\copia\\FleetManagementSystem\\src\\FleetManagement.Infrastructure\\FleetManagement.Infrastructure.csproj",
+      "projectUniqueName": "C:\\Users\\user\\Desktop\\copia 2\\FleetManagementSystem\\src\\FleetManagement.Infrastructure\\FleetManagement.Infrastructure.csproj",
       "projectName": "FleetManagement.Infrastructure",
-      "projectPath": "C:\\Users\\user\\Desktop\\copia\\FleetManagementSystem\\src\\FleetManagement.Infrastructure\\FleetManagement.Infrastructure.csproj",
+      "projectPath": "C:\\Users\\user\\Desktop\\copia 2\\FleetManagementSystem\\src\\FleetManagement.Infrastructure\\FleetManagement.Infrastructure.csproj",
       "packagesPath": "C:\\Users\\user\\.nuget\\packages\\",
-      "outputPath": "C:\\Users\\user\\Desktop\\copia\\FleetManagementSystem\\src\\FleetManagement.Infrastructure\\obj\\",
+      "outputPath": "C:\\Users\\user\\Desktop\\copia 2\\FleetManagementSystem\\src\\FleetManagement.Infrastructure\\obj\\",
       "projectStyle": "PackageReference",
       "configFilePaths": [
         "C:\\Users\\user\\AppData\\Roaming\\NuGet\\NuGet.Config"
@@ -1140,8 +1140,8 @@
         "net8.0": {
           "targetAlias": "net8.0",
           "projectReferences": {
-            "C:\\Users\\user\\Desktop\\copia\\FleetManagementSystem\\src\\FleetManagement.Application\\FleetManagement.Application.csproj": {
-              "projectPath": "C:\\Users\\user\\Desktop\\copia\\FleetManagementSystem\\src\\FleetManagement.Application\\FleetManagement.Application.csproj"
+            "C:\\Users\\user\\Desktop\\copia 2\\FleetManagementSystem\\src\\FleetManagement.Application\\FleetManagement.Application.csproj": {
+              "projectPath": "C:\\Users\\user\\Desktop\\copia 2\\FleetManagementSystem\\src\\FleetManagement.Application\\FleetManagement.Application.csproj"
             }
           }
         }
