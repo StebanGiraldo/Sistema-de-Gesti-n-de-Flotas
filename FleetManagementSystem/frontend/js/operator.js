@@ -17,6 +17,22 @@ let routeLayer;
 let currentRoute = null;
 let myRoutes = [];
 
+// Avance del viaje: se consulta más seguido que la ruta (que casi no cambia) y el marcador del vehículo se desliza
+// durante todo el intervalo para que el movimiento sea continuo.
+const PROGRESS_POLL_MS = 5000;
+const ROUTE_POLL_MS = 15000;
+let vehicleMarker = null;
+let tripWasActive = false;
+
+// El ícono no depende de nada que cambie: se crea una sola vez y se reutiliza (reusa los estilos del marcador del panel).
+const VEHICLE_ICON = L.divIcon({
+  className: '',
+  html: '<div class="vehicle-marker-pin" style="background:#4c8dff"><span>🚚</span></div>',
+  iconSize: [34, 34],
+  iconAnchor: [17, 32],
+  popupAnchor: [0, -30]
+});
+
 function escapeHtml(str) {
   if (str === null || str === undefined) return '';
   return String(str).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -66,6 +82,7 @@ async function loadMyRoute() {
 
   currentRoute = active;
   showRoute(active);
+  await refreshProgress();
 }
 
 function showEmptyState() {
@@ -105,14 +122,18 @@ function showRoute(route) {
   renderOtherRoutes(route);
 }
 
+// Origen → paradas → destino, en el orden en que se recorren y con la forma que usan la lista y el mapa.
+function routeStops(route) {
+  return [
+    { label: 'Origen', latitude: route.originLat, longitude: route.originLng },
+    ...route.waypoints.map(w => ({ label: w.label, latitude: w.latitude, longitude: w.longitude })),
+    { label: 'Destino', latitude: route.destinationLat, longitude: route.destinationLng }
+  ];
+}
+
 function renderWaypoints(route) {
   const list = document.getElementById('waypointList');
-  const stops = [
-    { label: 'Origen', lat: route.originLat, lng: route.originLng },
-    ...route.waypoints.map(w => ({ label: w.label, lat: w.latitude, lng: w.longitude })),
-    { label: 'Destino', lat: route.destinationLat, lng: route.destinationLng }
-  ];
-  list.innerHTML = stops.map((s, i) => `
+  list.innerHTML = routeStops(route).map((s, i) => `
     <li><span class="waypoint-index">${i + 1}</span> ${escapeHtml(s.label)}</li>
   `).join('');
 }
@@ -138,19 +159,9 @@ function renderMap(route) {
 
   if (routeLayer) { map.removeLayer(routeLayer); }
 
-  const points = [
-    [route.originLat, route.originLng],
-    ...route.waypoints.map(w => [w.latitude, w.longitude]),
-    [route.destinationLat, route.destinationLng]
-  ];
-
-  routeLayer = L.layerGroup().addTo(map);
-  L.polyline(points, { color: '#2dd4bf', weight: 4, opacity: 0.85 }).addTo(routeLayer);
-  L.circleMarker(points[0], { radius: 7, color: '#34d399', fillColor: '#34d399', fillOpacity: 1 }).addTo(routeLayer).bindPopup('Origen');
-  L.circleMarker(points[points.length - 1], { radius: 7, color: '#f0546a', fillColor: '#f0546a', fillOpacity: 1 }).addTo(routeLayer).bindPopup('Destino');
-  route.waypoints.forEach(w => {
-    L.circleMarker([w.latitude, w.longitude], { radius: 5, color: '#4c8dff', fillColor: '#4c8dff', fillOpacity: 1 }).addTo(routeLayer).bindPopup(escapeHtml(w.label));
-  });
+  const stops = routeStops(route);
+  const points = stops.map(s => [s.latitude, s.longitude]);
+  routeLayer = TripRouteLayer.build(stops, route.status).addTo(map);
 
   setTimeout(() => {
     map.invalidateSize();
@@ -171,6 +182,73 @@ function renderOtherRoutes(active) {
       <span class="badge badge-${r.status}">${ROUTE_STATUS_LABELS[r.status] || r.status}</span>
     </div>
   `).join('');
+}
+
+// --- Avance del viaje: barra de progreso, kilómetros restantes, próxima parada, ETA y posición del vehículo ---
+// El panel se crea al usarse por primera vez, justo encima del mapa, para no tener que modificar el HTML de la página.
+function progressPanel() {
+  let panel = document.getElementById('tripProgressPanel');
+  if (!panel) {
+    panel = document.createElement('div');
+    panel.id = 'tripProgressPanel';
+    panel.className = 'trip-progress-panel hidden';
+    document.getElementById('operatorMap').before(panel);
+  }
+  return panel;
+}
+
+function renderTripProgress(trip) {
+  const panel = progressPanel();
+  if (trip === null) {
+    panel.classList.add('hidden');
+    removeVehicleMarker();
+    return;
+  }
+  panel.classList.remove('hidden');
+  panel.innerHTML = TripProgressUI.html(trip);
+  moveVehicleMarker(trip);
+}
+
+function moveVehicleMarker(trip) {
+  const position = [trip.latitude, trip.longitude];
+  if (vehicleMarker) {
+    MarkerMotion.glide(vehicleMarker, position, PROGRESS_POLL_MS);
+    return;
+  }
+  vehicleMarker = L.marker(position, { icon: VEHICLE_ICON, zIndexOffset: 1000 })
+    .addTo(map)
+    .bindPopup(`🚚 ${escapeHtml(trip.licensePlate)}`);
+}
+
+function removeVehicleMarker() {
+  if (!vehicleMarker) return;
+  map.removeLayer(vehicleMarker);
+  vehicleMarker = null;
+}
+
+async function refreshProgress() {
+  if (!currentRoute) {
+    tripWasActive = false;
+    renderTripProgress(null);
+    return;
+  }
+
+  let trips;
+  try {
+    trips = await FleetAPI.getTripProgress();
+  } catch (err) {
+    console.warn('No se pudo consultar el avance del viaje:', err.message);
+    return;
+  }
+
+  const trip = trips.find(t => t.routeId === currentRoute.id) || null;
+  const justFinished = trip === null && tripWasActive;
+  tripWasActive = trip !== null;
+  renderTripProgress(trip);
+
+  // El viaje salió de la lista de activos: llegó al destino o alguien cambió el estado a mano. Se vuelve a leer la ruta
+  // para mostrar su estado real sin esperar al siguiente ciclo de actualización.
+  if (justFinished) await loadMyRoute();
 }
 
 // --- Cambiar estado de la ruta ---
@@ -243,4 +321,5 @@ document.getElementById('refreshRouteBtn').addEventListener('click', loadMyRoute
 
 // --- Arranque + actualización periódica ---
 loadMyRoute();
-setInterval(loadMyRoute, 15000);
+setInterval(loadMyRoute, ROUTE_POLL_MS);
+setInterval(refreshProgress, PROGRESS_POLL_MS);

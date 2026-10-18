@@ -30,6 +30,8 @@ Operador), un dashboard administrativo y un portal para conductores.
    - [8.6 Resumen de ubicaciones](#86-resumen-de-ubicaciones-de-los-patrones)
    - [8.7 Patrones estructurales: Adapter, Bridge, Composite y Decorator](#87-patrones-estructurales-adapter-bridge-composite-y-decorator)
    - [8.8 Decorator de reportes y Facade del resumen](#88-decorator-de-reportes-y-facade-del-resumen)
+   - [8.9 Flyweight — perfiles compartidos por tipo de vehículo](#89-flyweight--perfiles-compartidos-por-tipo-de-vehículo)
+   - [8.10 Proxy — caché del proveedor de navegación](#810-proxy--caché-del-proveedor-de-navegación)
 9. [Documentación de la API REST](#9-documentación-de-la-api-rest)
 10. [Notas sobre paso a producción](#10-notas-sobre-paso-a-producción)
 11. [Limitaciones conocidas del prototipo](#11-limitaciones-conocidas-del-prototipo)
@@ -41,7 +43,7 @@ Operador), un dashboard administrativo y un portal para conductores.
 
 | # | Módulo | Requerimiento | Dónde vive |
 |---|--------|----------------|------------|
-| 1 | **Monitoreo en tiempo real** | Ver ubicación y estado de cada vehículo (disponible / en ruta / mantenimiento / fuera de servicio) | `FleetController` + `VehicleSimulationBackgroundService` + pestaña "Mapa y vehículos" del dashboard |
+| 1 | **Monitoreo en tiempo real** | Ver ubicación y estado de cada vehículo (disponible / en ruta / mantenimiento / fuera de servicio) y su avance sobre la ruta asignada | `FleetController` + `TripProgressController` + `VehicleSimulationBackgroundService` + pestaña "Mapa y vehículos" del dashboard |
 | 2 | **Optimización de rutas y asignación de cargas** | Crear rutas con paradas y artículos de carga, asignar vehículo/conductor, estimar distancia/tiempo | `DeliveryRoutesController` + `DeliveryRouteService` (patrón **Builder**) + pestaña "Rutas y cargas" |
 | 3 | **Mantenimiento predictivo** | Registrar mantenimientos y detectar cuáles vehículos tienen tareas vencidas por fecha o kilometraje | `MaintenanceController` + `MaintenanceService.GetVehiclesDueForMaintenanceAsync()` + pestaña "Mantenimiento" |
 | 4 | **Integración con sistemas de navegación** | El conductor puede abrir la ruta asignada en una app de navegación real | `NavigationController` + `NavigationService` (genera enlace de Google Maps) + botón "Abrir navegación" en el portal del operador |
@@ -125,17 +127,22 @@ FleetManagementSystem/
 │   │   ├── Reports/    ← DECORATOR de reportes (generador base + decoradores, sección 8.8)
 │   │   ├── Facades/    ← FACADE del resumen del dashboard (sección 8.8)
 │   │   ├── Metrics/    ← FleetMetrics: cálculos que comparten el reporte y el resumen
-│   │   └── Services/   (7 servicios: casos de uso)
+│   │   ├── Geo/        ← GeoMath: distancias (Haversine) e interpolación, compartidas por rutas y simulación
+│   │   ├── Simulation/ ← simulación del recorrido sobre la ruta asignada (secciones 5.3 y 10)
+│   │   ├── Flyweights/ ← FLYWEIGHT: perfil compartido por tipo de vehículo (sección 8.9)
+│   │   └── Services/   (servicios: casos de uso)
 │   │
 │   ├── FleetManagement.Infrastructure/
 │   │   ├── Logging/FleetAuditLogger.cs  ← SINGLETON
 │   │   ├── Persistence/ (6 repositorios en memoria + InMemoryDataSeeder + FleetDbContext)
 │   │   ├── Security/ (PasswordHasher, InMemorySessionTokenStore)
-│   │   └── BackgroundServices/VehicleSimulationBackgroundService.cs
+│   │   ├── Navigation/ ← GoogleMapsAdapter (Adapter) + CachingNavigationProviderProxy y su caché (PROXY, sección 8.10)
+│   │   ├── Simulation/ (InMemoryTripProgressTracker: avance de los viajes, en memoria)
+│   │   └── BackgroundServices/VehicleSimulationBackgroundService.cs  (temporizador de la simulación)
 │   │
 │   └── FleetManagement.Api/
 │       ├── Program.cs                 ← Composition Root (Inyección de Dependencias)
-│       ├── Controllers/ (8 controladores REST)
+│       ├── Controllers/ (13 controladores REST)
 │       ├── Middleware/TokenAuthenticationMiddleware.cs
 │       └── Filters/RequireRoleAttribute.cs
 │
@@ -177,8 +184,10 @@ Al iniciar, la aplicación:
 2. Carga datos de demostración (`InMemoryDataSeeder`) con usuarios, vehículos, rutas
    y mantenimientos de ejemplo, usando coordenadas de Santander y otras ciudades de Colombia.
 3. Expone Swagger en **http://localhost:5080/swagger** para explorar y probar cada endpoint.
-4. Inicia el `VehicleSimulationBackgroundService`, que mueve levemente los vehículos
-   "En ruta" cada 5 segundos para simular el tiempo real.
+4. Inicia el `VehicleSimulationBackgroundService`, que cada segundo avanza los vehículos
+   "En ruta" a lo largo de su ruta asignada (origen → paradas → destino) para simular el
+   tiempo real; un vehículo "En ruta" sin ruta activa no se mueve. Los parámetros se
+   configuran como indica la [sección 5.3](#53-configuración-de-la-simulación-y-del-caché-de-navegación).
 
 > Si NuGet no está accesible en su red corporativa/sandbox, configure un proxy o
 > ejecute `dotnet restore` desde una red con salida a `api.nuget.org`.
@@ -200,6 +209,45 @@ python3 -m http.server 8080
 
 Si el backend corre en un host/puerto distinto de `http://localhost:5080`, ajuste
 la constante `API_BASE_URL` en `frontend/js/api.js`.
+
+### 5.3 Configuración de la simulación y del caché de navegación
+
+Los parámetros de la simulación del recorrido y del caché del proxy de navegación
+([sección 8.10](#810-proxy--caché-del-proveedor-de-navegación)) no están escritos dentro del
+código: se leen de las secciones `Simulation` y `NavigationCache` de la configuración con el
+patrón Options (`IOptions<T>`) y se **validan al arrancar**. Un valor imposible (por ejemplo,
+`Simulation:TickSeconds` igual a 0) detiene la aplicación con un mensaje claro en lugar de
+dejar una simulación congelada. `appsettings.json` no incluye estas secciones, así que, si no
+se configuran, valen los valores por defecto:
+
+| Clave | Por defecto | Qué controla |
+|-------|-------------|--------------|
+| `Simulation:TickSeconds` | `1` | Cada cuántos segundos reales avanza la simulación un paso (mayor que 0). |
+| `Simulation:TimeAcceleration` | `1` | Cuántas veces más rápido que en la realidad se mueven los vehículos (mayor que 0). Con `1`, un vehículo que va a 100 km/h recorre 100 km en una hora real; con `10`, en 6 minutos. |
+| `Simulation:DelayedSpeedFactor` | `0.5` | Fracción de la velocidad normal con la que avanza una ruta en estado `Delayed` (mayor que 0 y hasta 1). |
+| `NavigationCache:TimeToLiveMinutes` | `10` | Minutos que se considera vigente una URL de navegación guardada (mayor que 0 y hasta 10 080, una semana). |
+| `NavigationCache:MaxEntries` | `500` | Máximo de URLs guardadas a la vez (al menos 1). |
+
+Para una demostración, lo más cómodo son las variables de entorno (el doble guion bajo
+equivale a `:`). El viaje de demostración de `VAN-002` (6,955 km a 100 km/h) dura unos
+4 min 10 s con la configuración por defecto y unos 25 s con aceleración 10:
+
+```bash
+# Git Bash / Linux / macOS
+export Simulation__TimeAcceleration=10
+dotnet run --project src/FleetManagement.Api
+```
+
+```powershell
+# PowerShell
+$env:Simulation__TimeAcceleration = "10"
+dotnet run --project src/FleetManagement.Api
+```
+
+> `appsettings.json` ya traía la clave `FleetOptions:SimulationIntervalSeconds`, pero ningún
+> código la leía (el intervalo de 5 segundos estaba escrito dentro del servicio de simulación).
+> Sigue ahí, sin efecto y sin modificar; la clave que gobierna el intervalo ahora es
+> `Simulation:TickSeconds`.
 
 ---
 
@@ -512,6 +560,8 @@ pasan de "volver a diligenciar todos los campos" a "clonar y ajustar dos datos".
 | Decorator (`NotificationDecorator`: Audit, Retry, Priority) | Los mismos endpoints que el Bridge; el resultado queda en `GET /api/audit/logs` | Pestaña "Auditoría" |
 | Decorator de reportes (`FleetReportDecorator`: Statistics, MaintenanceAlerts, CargoSummary) | `GET /api/reports/fleet?sections=...` | — |
 | Facade (`FleetDashboardFacade`) | `GET /api/dashboard/summary` | — |
+| Flyweight (`IVehicleTypeProfileFactory` → `VehicleTypeProfile`) | `GET /api/fleet/vehicle-types`; además lo usa por dentro el simulador, cuyo resultado se ve en `GET /api/progress` | Marcadores del mapa (un ícono compartido por tipo y estado) |
+| Proxy (`CachingNavigationProviderProxy`) | `GET /api/navigation/route/{routeId}` (el mismo endpoint del Adapter: la segunda consulta de la misma ruta sale del caché) | Enlace de navegación de la ruta |
 
 ### 8.7 Patrones estructurales: Adapter, Bridge, Composite y Decorator
 
@@ -582,6 +632,158 @@ Límites a tener en cuenta:
 - Los dos endpoints son de sólo lectura y, como el resto de las consultas `GET`, no exigen rol (ver sección 9).
 - El frontend todavía no consume estos endpoints: se pueden probar con Swagger o `curl`.
 
+### 8.9 Flyweight — perfiles compartidos por tipo de vehículo
+
+Se agregó **de forma aditiva**, junto con la simulación del recorrido (secciones 5.3 y 10): ninguna clase de los
+patrones anteriores se modificó. El Abstract Factory (`FleetOnboardingFactoryProvider` y sus fábricas),
+`VehicleService` y `FleetController` siguen exactamente como estaban; `VehicleService.CreateVehicleAsync` sigue
+creando, con el Abstract Factory, el `NavigationProfile` y el `MaintenancePlan` propios de cada vehículo nuevo.
+
+| Pieza | Dónde está | Papel |
+|-------|------------|-------|
+| `VehicleTypeProfile` | `Application/Flyweights/VehicleTypeProfile.cs` | **Flyweight**: perfil inmutable que comparten todos los vehículos de un mismo tipo (nombre del perfil, velocidad máxima, restricciones de navegación y plantillas de mantenimiento). |
+| `IVehicleTypeProfileFactory` / `VehicleTypeProfileFactory` | `Application/Flyweights/` | **Fábrica de flyweights**: `GetProfile(VehicleType)` devuelve siempre la **misma instancia** para un tipo (`ConcurrentDictionary<VehicleType, Lazy<…>>`, segura para varios hilos). |
+| `Vehicle` y `TripProgress` | `Domain/Entities/Vehicle.cs`, `Application/Simulation/TripProgress.cs` | **Estado extrínseco**: placa, posición, estado, kilometraje y avance del viaje. Cambia por vehículo y no se comparte. |
+| Consumidores | `VehicleMovementSimulator`, `TripProgressService` y `VehicleTypeService` (con `GET /api/fleet/vehicle-types`) | Solo **leen** el perfil: nadie lo reconstruye ni lo modifica. |
+| Frontend | `frontend/js/dashboard.js` (`vehicleIconCache`, `vehicleDivIcon`) | El mismo patrón en el cliente: un solo ícono de Leaflet (`L.divIcon`) por combinación tipo + estado, compartido por todos los marcadores. |
+
+**Estado intrínseco y extrínseco.** Lo que es igual para cualquier vehículo de un tipo (la velocidad máxima de un
+camión, evitar puentes bajos, sus tareas de mantenimiento) es *intrínseco* y vive en el perfil compartido. Lo que
+cambia de un vehículo a otro (placa, dónde está, cuántos kilómetros lleva, cuánto de su ruta ha recorrido) es
+*extrínseco* y se queda en el vehículo.
+
+| Tipo | Perfil | Velocidad máxima |
+|------|--------|------------------|
+| `Truck` | Perfil Camión de Carga | 80 km/h |
+| `Van` | Perfil Furgoneta de Reparto | 100 km/h |
+| `Car` | Perfil Vehículo Liviano | 120 km/h |
+| `Motorcycle` | Perfil Motocicleta de Mensajería | 80 km/h |
+
+**Qué ahorra y qué no.** Con cuatro tipos de vehículo el ahorro de memoria es **pequeño**: son cuatro objetos chicos,
+y construirlos de nuevo en cada uso costaría microsegundos. Presentarlo como una optimización de memoria sería
+exagerar. El patrón se justifica aquí por otras tres razones, que sí aplican:
+
+1. **Una sola fuente de verdad.** El simulador (cuánto avanza cada vehículo), el servicio de progreso (cuántos
+   minutos faltan) y el endpoint de tipos leen la misma velocidad del mismo objeto. La ETA que ve el usuario sale de
+   la misma función de velocidad que mueve al vehículo (`TripSpeed`), así que no pueden contradecirse.
+2. **No reconstruir en cada ciclo.** La simulación corre cada segundo para todos los viajes activos. Pedir el perfil
+   es una consulta a un diccionario; el Abstract Factory, en cambio, crea objetos nuevos (`NavigationProfile`,
+   `MaintenancePlan`) cada vez que se le pide.
+3. **Escalabilidad.** Si el catálogo creciera (por ejemplo, un perfil por modelo con tablas de mantenimiento largas),
+   compartir una instancia por clave sí ahorraría memoria de forma medible; el diseño ya está listo para eso.
+
+**Relación con el Abstract Factory.** `VehicleTypeProfileFactory` no repite los valores: los lee de
+`FleetOnboardingFactoryProvider` (sin modificarlo) y los **copia** a records inmutables. Los productos de ese
+Abstract Factory (`NavigationProfile`, `MaintenancePlan`) son clases mutables, así que se descartan después de
+copiarlos: compartirlos rompería el patrón, porque cualquier consumidor podría alterarlos para todos los demás. Una
+prueba comprueba que cada perfil coincide con lo que entrega el Abstract Factory.
+
+```csharp
+// En el simulador: la velocidad sale del perfil compartido del tipo, no de un objeto creado para la ocasión.
+var profile = _profiles.GetProfile(trip.Vehicle.Type);                      // siempre la misma instancia por tipo
+var speedKmh = TripSpeed.KmPerHour(profile, trip.Route.Status, _options);  // perfil × retraso × aceleración
+```
+
+```javascript
+// dashboard.js — un ícono por combinación tipo|estado, reutilizado por todos los marcadores
+const vehicleIconCache = new Map();
+function vehicleDivIcon(vehicle) {
+  const key = `${vehicle.type}|${vehicle.status}`;
+  if (!vehicleIconCache.has(key)) vehicleIconCache.set(key, createVehicleDivIcon(vehicle));
+  return vehicleIconCache.get(key);
+}
+```
+
+En el cliente el caché tiene además un efecto práctico: Leaflet rehace el elemento del marcador cada vez que recibe un
+ícono distinto, por eso el dashboard llama a `setIcon` solo cuando el ícono cambió de verdad (así no se corta el
+deslizamiento suave del marcador entre dos lecturas).
+
+**Límites.** Un Flyweight solo es seguro mientras sea inmutable: por eso `VehicleTypeProfile` no tiene setters y copia
+su lista de tareas a una colección de solo lectura. Los perfiles no cambian mientras la aplicación corre; si algún día
+hicieran falta cambios en caliente, habría que **reemplazar** la instancia, nunca modificarla.
+
+**Cómo comprobarlo.** `GET /api/fleet/vehicle-types` devuelve los cuatro perfiles con su velocidad máxima, y
+`GET /api/progress` muestra al simulador usándolos: la ETA de un viaje es `kilómetros restantes / velocidad del tipo`
+(ajustada por retraso y aceleración). Las pruebas de `Flyweight/` verifican con `Assert.Same` que el mismo tipo
+devuelve siempre la misma instancia, también desde muchos hilos a la vez (`Parallel.For`).
+
+### 8.10 Proxy — caché del proveedor de navegación
+
+Se agregó **de forma aditiva**: `NavigationService`, `GoogleMapsAdapter` y `GoogleMapsApi` **no se modificaron**. Fuera
+del código nuevo, lo único que cambió es el registro de `INavigationProvider` en `Program.cs`.
+
+| Pieza | Dónde está | Papel |
+|-------|------------|-------|
+| `INavigationProvider` | `Application/Interfaces/` (ya existía) | **Interfaz del sujeto**: la misma que usa `NavigationService`. El proxy la implementa, así que el cliente no nota la diferencia. |
+| `GoogleMapsAdapter` | `Infrastructure/Navigation/` (sin cambios) | **Sujeto real**: genera la URL de Google Maps. |
+| `CachingNavigationProviderProxy` | `Infrastructure/Navigation/` | **Proxy de caché**: si la misma ruta ya se pidió hace poco, devuelve la URL guardada y no llega al sujeto real. |
+| `NavigationCacheKey` | `Infrastructure/Navigation/` | Clave de una ruta: origen + paradas en orden de visita + destino. |
+| `ExpiringUrlCache` | `Infrastructure/Navigation/` | Almacén con vencimiento y tamaño máximo, seguro para varios hilos. |
+| `NavigationCacheOptions` | `Infrastructure/Navigation/` | Tiempo de vida y tamaño máximo, configurables ([sección 5.3](#53-configuración-de-la-simulación-y-del-caché-de-navegación)). |
+
+El Adapter pasa a registrarse como clase concreta y `INavigationProvider` se construye con una fábrica que lo envuelve
+(`Program.cs`):
+
+```csharp
+builder.Services.AddSingleton<GoogleMapsAdapter>();
+// ... opciones validadas de "NavigationCache" y TimeProvider.System ...
+builder.Services.AddSingleton<INavigationProvider>(provider => new CachingNavigationProviderProxy(
+    provider.GetRequiredService<GoogleMapsAdapter>(),
+    provider.GetRequiredService<NavigationCacheOptions>(),
+    provider.GetRequiredService<TimeProvider>()));
+```
+
+**Qué pasa en una consulta.**
+
+1. `NavigationService` pide la URL a su `INavigationProvider`, que ahora es el proxy.
+2. El proxy calcula la `NavigationCacheKey` de la ruta.
+3. Si hay una entrada **vigente** con esa clave, devuelve esa URL y **no llama** al sujeto real.
+4. Si no, llama al Adapter, guarda la URL con su tiempo de vida y la devuelve.
+
+**La clave.** Dos pedidos comparten entrada solo si el proveedor real devolvería la misma URL:
+
+- Origen, destino y paradas **en el orden en que se visitan** (se ordenan por `Order`, igual que hace el Adapter).
+- Coordenadas redondeadas a **6 decimales** (~11 cm) y formateadas con la **cultura invariante** (con coma decimal las
+  claves cambiarían de un equipo a otro). `-0` y `0` dan la misma clave.
+- **No** entran la etiqueta de las paradas, el nombre de la ruta ni los valores absolutos de `Order`, porque no afectan a
+  la URL de Google Maps: dos rutas con otro nombre y otras etiquetas, pero la misma geometría, comparten entrada.
+
+**Vencimiento y tamaño.** Una entrada vence cuando `ahora ≥ creación + NavigationCache:TimeToLiveMinutes` (el reloj es un
+`TimeProvider` inyectado: las pruebas lo adelantan a mano en vez de esperar). Al llegar a `NavigationCache:MaxEntries` se
+retiran primero las entradas vencidas y, si sigue lleno, la más antigua. Una URL vencida nunca se devuelve.
+
+**Proxy frente a Decorator.** Estructuralmente se parecen (los dos envuelven un objeto con su misma interfaz), pero la
+intención es distinta:
+
+| | Decorators del proyecto (notificaciones y reportes) | Proxy de caché |
+|---|---|---|
+| Intención | **Añadir responsabilidades** funcionales al objeto envuelto: reintentar, auditar, dar prioridad, agregar secciones a un reporte. | **Controlar el acceso** al sujeto real: decidir si y cuándo se le llama. |
+| Efecto en el resultado | El resultado cambia o se enriquece. | Ninguno: devuelve exactamente lo que daría el sujeto real. |
+| Composición | Se apilan y combinan en el orden que elige quien los arma (`.WithPriority().WithRetry().WithAudit()`). | Uno solo, fijo, decidido en el Composition Root. |
+| Quién lo conoce | Quien los arma decide cuáles aplicar. | El cliente (`NavigationService`) no sabe que existe. |
+| Ciclo de vida | Por operación o por petición. | **Singleton**: guarda estado (el caché); con otro ciclo de vida cada petición tendría un caché vacío. |
+
+**Compromisos asumidos** (decisiones conscientes, no descuidos):
+
+- **Sin coalescencia de pedidos simultáneos.** Si dos peticiones piden a la vez una ruta que todavía no está en el
+  caché, las dos pueden llegar al proveedor (una vez cada una). Es aceptable porque generar la URL no tiene efectos
+  secundarios; evitarlo exigiría coordinar los pedidos en vuelo, más complejidad de la que este caso justifica.
+- **Caché de memoria, por proceso.** No se comparte entre instancias de la API ni sobrevive a un reinicio. Con varias
+  instancias haría falta un caché distribuido detrás de la misma interfaz.
+- **Los errores no se guardan.** Si el proveedor falla, la excepción llega al cliente tal cual y el siguiente pedido lo
+  intenta de nuevo.
+- **Redondeo a 6 decimales.** Dos puntos a menos de ~11 cm comparten URL; para una app de navegación es irrelevante,
+  pero es una decisión consciente.
+- **El beneficio práctico de hoy es pequeño.** `GoogleMapsApi.BuildDirectionsUrl` solo arma una cadena en memoria: no
+  hay red, cuota ni latencia que ahorrar. El proxy se justifica cuando el proveedor sea remoto (por ejemplo, una API de
+  direcciones con cuota y costo por consulta); como es transparente, entonces bastará con cambiar el sujeto que envuelve.
+
+**Cómo comprobarlo.** Como el proxy es transparente, el endpoint `GET /api/navigation/route/{routeId}` responde igual con
+o sin él, así que la evidencia no está en la respuesta sino en las pruebas, que cuentan cuántas veces se llama al
+sujeto: `dotnet test --filter "FullyQualifiedName~Proxy"`. Cubren que la segunda consulta idéntica no llega al sujeto, que
+una clave distinta sí, el vencimiento por tiempo de vida (con un reloj manual), el tamaño máximo, que los errores no se
+guardan, la transparencia frente al `GoogleMapsAdapter` real y el conjunto con el `NavigationService` real.
+
 ---
 
 ## 9. Documentación de la API REST
@@ -595,6 +797,8 @@ correr el backend. Resumen de endpoints:
 | POST | `/api/auth/logout` | Cierra la sesión actual | — |
 | GET | `/api/fleet/vehicles` | Ubicación y estado de todos los vehículos | — |
 | GET | `/api/fleet/vehicles/{id}` | Detalle de un vehículo | — |
+| GET | `/api/fleet/vehicle-types` | Perfil de cada tipo de vehículo: velocidad máxima, restricciones de navegación y tareas de mantenimiento (Flyweight) | — |
+| GET | `/api/progress` | Avance de **todos** los viajes activos en una sola llamada: porcentaje, km recorridos y restantes, próxima parada, ETA en minutos y puntos de la ruta | — |
 | POST | `/api/fleet/vehicles` | Crea un vehículo (Factory Method + Abstract Factory) | Admin |
 | POST | `/api/fleet/vehicles/{id}/clone` | Clona un vehículo plantilla (Prototype) | Admin |
 | PATCH | `/api/fleet/vehicles/{id}/status` | Cambia el estado de un vehículo | Admin |
@@ -615,7 +819,7 @@ correr el backend. Resumen de endpoints:
 | GET | `/api/alerts/route/{routeId}` | Alertas de una ruta | — |
 | POST | `/api/alerts` | Reporta una complicación durante el viaje | — (operador) |
 | PATCH | `/api/alerts/{id}/resolve` | Marca una alerta como resuelta | Admin |
-| GET | `/api/navigation/route/{routeId}` | Enlace de navegación externa (Google Maps) | — |
+| GET | `/api/navigation/route/{routeId}` | Enlace de navegación externa (Google Maps). Adapter detrás de un Proxy de caché | — |
 | GET | `/api/audit/logs` | Registro de auditoría (Singleton) | Admin |
 | GET | `/api/reports/fleet` | Reporte de la flota (vehículos y rutas). Con `?sections=Statistics,MaintenanceAlerts,CargoSummary` agrega esas secciones (Decorator) | — |
 | GET | `/api/dashboard/summary` | Resumen general de la flota para el dashboard (Facade) | — |
@@ -651,14 +855,35 @@ para mantenerlo simple, y quedan documentadas aquí para quien continúe el proy
   Las contraseñas ya se almacenan correctamente hasheadas (PBKDF2 + sal), lo cual
   sí es una práctica válida para producción.
 - **Optimización de rutas:** `DeliveryRouteService` estima distancia y tiempo con
-  la fórmula de **Haversine** entre origen, paradas y destino, más una velocidad
+  la fórmula de **Haversine** entre origen, paradas y destino (hoy en `Application/Geo/GeoMath`,
+  compartida con la simulación; da los mismos resultados que antes), más una velocidad
   promedio asumida. Es una heurística razonable para un prototipo, no un
   solver de ruteo (VRP); un siguiente paso natural sería integrar un motor de
   ruteo real (OSRM, Google Routes API, etc.) detrás de la misma interfaz
   `INavigationService`.
-- **Simulación de tiempo real:** `VehicleSimulationBackgroundService` mueve los
-  vehículos "En ruta" con pequeños saltos aleatorios cada 5 segundos. En un
-  sistema real, esta posición vendría de dispositivos GPS/telemetría reportando
+- **Simulación de tiempo real:** `VehicleSimulationBackgroundService` es ahora un
+  simple temporizador (`PeriodicTimer`, cada `Simulation:TickSeconds`, por defecto 1 s)
+  que en cada paso le pide a `IVehicleMovementSimulator` avanzar el tiempo transcurrido.
+  Ya no hay saltos aleatorios: el simulador mueve cada vehículo "En ruta" que tiene una
+  ruta activa (`InProgress` o `Delayed`) **a lo largo de la poligonal origen → paradas →
+  destino**, a la velocidad de su tipo (perfil Flyweight, [sección 8.9](#89-flyweight--perfiles-compartidos-por-tipo-de-vehículo))
+  multiplicada por `Simulation:TimeAcceleration`; una ruta `Delayed` avanza a
+  `Simulation:DelayedSpeedFactor` de esa velocidad (la mitad por defecto). Reglas:
+  - Un vehículo "En ruta" **sin** ruta activa no se mueve.
+  - El kilometraje suma la distancia realmente recorrida sobre la ruta.
+  - Al llegar, el vehículo queda en el destino exacto y la ruta se completa con
+    `IDeliveryRouteService.UpdateRouteStatusAsync(id, "Completed")`, que ya libera al
+    vehículo y deja la auditoría (esa lógica no se duplicó).
+  - Si una ruta deja de estar activa por un cambio manual de estado (por ejemplo,
+    `Cancelled`), su avance se descarta en el siguiente paso.
+  - `GET /api/progress` informa el avance de todos los viajes activos en una sola
+    llamada. El dashboard y el portal del operador lo consultan cada 5 s, **en paralelo**
+    con los vehículos (`Promise.all`), dibujan el recorrido con sus paradas (`L.polyline`),
+    muestran porcentaje, kilómetros restantes, próxima parada y ETA, y deslizan el
+    marcador de forma suave entre una lectura y la siguiente.
+
+  Los parámetros están en la [sección 5.3](#53-configuración-de-la-simulación-y-del-caché-de-navegación).
+  En un sistema real, esta posición vendría de dispositivos GPS/telemetría reportando
   a la API (o a un broker de mensajes) en lugar de generarse en el servidor.
 - **CORS:** configurado como `AllowAnyOrigin()` para simplificar la evaluación
   del prototipo desde cualquier origen local. En producción debe restringirse al
@@ -680,6 +905,14 @@ para mantenerlo simple, y quedan documentadas aquí para quien continúe el proy
   registrados manualmente en cada `MaintenanceRecord`; no hay integración con
   telemetría real del vehículo para el kilometraje actual (se actualiza junto
   con la simulación de movimiento).
+- La simulación recorre la ruta en línea recta entre el origen, las paradas y el
+  destino (lo mismo que dibuja el mapa): no sigue las calles ni simula tráfico. El
+  avance de los viajes vive en memoria, como el resto de los datos, y se pierde al
+  reiniciar la API.
+- El caché del proxy de navegación ([sección 8.10](#810-proxy--caché-del-proveedor-de-navegación))
+  es de memoria y por proceso, y hoy el proveedor real solo arma un texto, así que su
+  beneficio práctico es pequeño. Lo mismo vale para el Flyweight con cuatro tipos de
+  vehículo ([sección 8.9](#89-flyweight--perfiles-compartidos-por-tipo-de-vehículo)).
 
 ---
 
@@ -736,6 +969,24 @@ los dobles de prueba están escritos a mano.
 | `Support/` | Dobles de prueba de los servicios (`FleetServiceFakes.cs`) y una flota con los servicios reales sobre los repositorios en memoria (`RealFleet.cs`). |
 
 Para ejecutar sólo una parte: `dotnet test --filter "FullyQualifiedName~ReportDecorator"` o `...~Facade`.
+
+### Pruebas de la simulación, el Flyweight y el Proxy (secciones 5.3, 8.9 y 8.10)
+
+Con las pruebas nuevas, el total esperado en el mismo proyecto es de **393**: las 218 anteriores, sin modificar, más 175
+nuevas (cada fila de un `[Theory]` cuenta como una prueba). Siguen sin usar librerías de mocking: los dobles de prueba
+están escritos a mano.
+
+| Carpeta | Qué demuestra |
+|---------|----------------|
+| `Geo/` | `GeoMath`: distancias de referencia, simetría, interpolación exacta en los extremos y que `DeliveryRouteService` estima la distancia exactamente igual que antes. |
+| `Simulation/` | `RoutePath` (tramos, paradas, punto exacto, tramos de longitud cero), `TripSpeed`, `ActiveTrips`, `SimulationOptions`, `InMemoryTripProgressTracker` (también con varios hilos), `TripProgressService` y `VehicleSimulationBackgroundService`. Del `VehicleMovementSimulator`, con dobles de los repositorios y del servicio de rutas: el vehículo solo se mueve sobre la poligonal; al llegar queda en el destino y la ruta se completa; sin ruta activa no se mueve; una ruta retrasada avanza más despacio; el kilometraje suma la distancia real recorrida. |
+| `Flyweight/` | Misma instancia por tipo (`Assert.Same`), también desde muchos hilos a la vez (`Parallel.For`); instancias distintas entre tipos; valores copiados del Abstract Factory; inmutabilidad; y `VehicleTypeService`. |
+| `Proxy/` | La segunda llamada idéntica no llega al sujeto, una clave distinta sí, vencimiento por tiempo de vida, tamaño máximo, errores sin guardar, transparencia frente al `GoogleMapsAdapter` real y detrás del `NavigationService` real. Además, el almacén (`ExpiringUrlCache`), la clave (`NavigationCacheKey`) y las opciones (`NavigationCacheOptions`) por separado. |
+| `Architecture/` | `Application` no referencia a `Infrastructure` ni a `Api` (ni a ASP.NET Core ni EF Core), `Domain` no referencia a ninguna otra capa e `Infrastructure` no referencia a `Api`. |
+| `Support/ManualTimeProvider.cs` | Reloj manual que reemplaza al reloj real en las pruebas del Proxy: el tiempo solo avanza cuando la prueba lo ordena. |
+
+Para ejecutar sólo una parte: `dotnet test --filter "FullyQualifiedName~Simulation"`, `...~Flyweight`, `...~Proxy` o
+`...~Architecture`.
 
 ### Demostración manual / en vivo (sin correr pruebas)
 

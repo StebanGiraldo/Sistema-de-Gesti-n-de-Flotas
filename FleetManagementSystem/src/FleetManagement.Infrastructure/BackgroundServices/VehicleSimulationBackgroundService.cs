@@ -1,5 +1,4 @@
-using FleetManagement.Application.Interfaces.Repositories;
-using FleetManagement.Domain.Enums;
+using FleetManagement.Application.Simulation;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -7,62 +6,61 @@ using Microsoft.Extensions.Logging;
 namespace FleetManagement.Infrastructure.BackgroundServices;
 
 /// <summary>
-/// Servicio en segundo plano (IHostedService) que simula el movimiento de
-/// los vehículos en estado "EnRoute" para que el dashboard muestre
-/// actividad en tiempo real simulado, tal como pide el enunciado: el
-/// frontend consume la API vía fetch() periódicamente (polling) y aquí es
-/// donde esa posición "se mueve" entre una llamada y la siguiente.
+/// Reloj de la simulación (IHostedService): cada <see cref="SimulationOptions.TickSeconds"/> segundos le avisa al
+/// <see cref="IVehicleMovementSimulator"/> cuánto tiempo pasó. No decide nada del movimiento: esa lógica vive en
+/// Application, donde se prueba sin esperar y sin depender del host (SRP). El frontend consulta la API por polling y aquí
+/// es donde la posición "avanza" entre una consulta y la siguiente, tal como pide el enunciado.
 ///
-/// Usa IServiceScopeFactory para crear un scope propio en cada ciclo, lo
-/// cual es la práctica recomendada por Microsoft para que un servicio de
-/// larga duración (Singleton) resuelva dependencias sin importar si esas
-/// dependencias están registradas como Singleton o Scoped.
+/// Crea un scope por paso con IServiceScopeFactory porque este servicio es Singleton y el simulador depende de servicios
+/// Scoped (p. ej. IDeliveryRouteService): es la práctica recomendada por Microsoft para servicios de larga duración.
+/// Un fallo en un paso se registra y NO detiene el reloj; de lo contrario un error pasajero congelaría la simulación
+/// hasta reiniciar la aplicación. El paso dura siempre lo mismo (<see cref="SimulationOptions.TickSeconds"/>): así el
+/// avance no depende de la hora del sistema ni de cuánto tardó el paso anterior.
 /// </summary>
-public class VehicleSimulationBackgroundService : BackgroundService
+public sealed class VehicleSimulationBackgroundService : BackgroundService
 {
     private readonly IServiceScopeFactory _scopeFactory;
+    private readonly SimulationOptions _options;
     private readonly ILogger<VehicleSimulationBackgroundService> _logger;
-    private readonly Random _random = new();
 
-    public VehicleSimulationBackgroundService(IServiceScopeFactory scopeFactory, ILogger<VehicleSimulationBackgroundService> logger)
+    public VehicleSimulationBackgroundService(
+        IServiceScopeFactory scopeFactory,
+        SimulationOptions options,
+        ILogger<VehicleSimulationBackgroundService> logger)
     {
         _scopeFactory = scopeFactory;
+        _options = options;
         _logger = logger;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        while (!stoppingToken.IsCancellationRequested)
+        var tick = TimeSpan.FromSeconds(_options.TickSeconds);
+        using var timer = new PeriodicTimer(tick);
+
+        try
         {
-            try
-            {
-                using var scope = _scopeFactory.CreateScope();
-                var vehicleRepository = scope.ServiceProvider.GetRequiredService<IVehicleRepository>();
-                var vehicles = await vehicleRepository.GetAllAsync();
+            while (await timer.WaitForNextTickAsync(stoppingToken))
+                await RunTickAsync(tick, stoppingToken);
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            // El host pidió detenerse mientras se esperaba el siguiente paso: es la salida normal del bucle, no un error.
+            _logger.LogInformation("Simulación de movimiento detenida.");
+        }
+    }
 
-                foreach (var vehicle in vehicles.Where(v => v.Status == VehicleStatus.EnRoute))
-                {
-                    var latJitter = (_random.NextDouble() - 0.5) * 0.006;
-                    var lngJitter = (_random.NextDouble() - 0.5) * 0.006;
-                    vehicle.UpdateLocation(vehicle.CurrentLocation.Y + latJitter, vehicle.CurrentLocation.X + lngJitter);
-                    vehicle.MileageKm += _random.NextDouble() * 1.5;
-                    await vehicleRepository.UpdateAsync(vehicle);
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error al simular el movimiento de los vehículos.");
-            }
-
-            try
-            {
-                await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
-            }
-            catch (OperationCanceledException)
-            {
-                // Cierre solicitado por el host durante la espera: se sale del bucle de forma controlada.
-                break;
-            }
+    private async Task RunTickAsync(TimeSpan elapsed, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using var scope = _scopeFactory.CreateAsyncScope();
+            var simulator = scope.ServiceProvider.GetRequiredService<IVehicleMovementSimulator>();
+            await simulator.AdvanceAsync(elapsed, cancellationToken);
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            _logger.LogError(ex, "Error al simular el movimiento de los vehículos.");
         }
     }
 }

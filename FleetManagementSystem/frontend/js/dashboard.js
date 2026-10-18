@@ -29,6 +29,15 @@ let vehiclesCache = [], routesCache = [], driversCache = [];
 let selectedVehicleId = null;
 let pollTimer = null;
 
+// Avance de los viajes activos (GET /api/progress) y su recorrido dibujado en el mapa.
+let progressCache = [];
+let tripByVehicleId = new Map();
+const tripRouteLayers = new Map(); // routeId -> { signature, layer }
+
+// Cada cuánto se vuelve a consultar la API. También es la duración del deslizamiento de los marcadores: si se mueven
+// durante todo el intervalo, el movimiento es continuo y no a saltos.
+const POLL_INTERVAL_MS = 5000;
+
 // ---------------------------------------------------------------------
 // Utilidades: formato, escape HTML, toasts y modales
 // ---------------------------------------------------------------------
@@ -93,7 +102,19 @@ function initMap() {
   }).addTo(map);
 }
 
+// FLYWEIGHT (ver README, sección 8.9): el ícono solo depende del tipo y del estado del vehículo, así que hay a lo sumo
+// 4 x 4 combinaciones. Cada una se construye una sola vez y se comparte entre todos los marcadores; antes se creaba un
+// ícono nuevo por vehículo en cada refresco, y entregarle a Leaflet un objeto distinto cada vez le obligaba a rehacer el
+// elemento del DOM del marcador (lo que además cortaba su deslizamiento).
+const vehicleIconCache = new Map();
+
 function vehicleDivIcon(vehicle) {
+  const key = `${vehicle.type}|${vehicle.status}`;
+  if (!vehicleIconCache.has(key)) vehicleIconCache.set(key, createVehicleDivIcon(vehicle));
+  return vehicleIconCache.get(key);
+}
+
+function createVehicleDivIcon(vehicle) {
   const color = STATUS_COLORS[vehicle.status] || '#8b93a4';
   const emoji = VEHICLE_TYPE_ICONS[vehicle.type] || '📍';
   return L.divIcon({
@@ -105,11 +126,18 @@ function vehicleDivIcon(vehicle) {
   });
 }
 
+// El avance solo existe para los vehículos con un viaje activo; para los demás no se muestra nada.
+function tripProgressHtml(vehicle, render) {
+  const trip = tripByVehicleId.get(vehicle.id);
+  return trip ? render(trip) : '';
+}
+
 function popupHtml(v) {
   return `
     <strong>${escapeHtml(v.licensePlate)}</strong> — ${escapeHtml(v.brand)} ${escapeHtml(v.model)}<br/>
     ${v.assignedDriverName ? 'Conductor: ' + escapeHtml(v.assignedDriverName) : 'Sin conductor asignado'}<br/>
     ${Math.round(v.mileageKm).toLocaleString('es-CO')} km recorridos<br/>
+    ${tripProgressHtml(v, TripProgressUI.html)}
     <select class="vehicle-status-select" data-id="${v.id}" style="margin-top:6px;width:100%;padding:4px;border-radius:6px;">
       <option value="Available" ${v.status === 'Available' ? 'selected' : ''}>Disponible</option>
       <option value="EnRoute" ${v.status === 'EnRoute' ? 'selected' : ''}>En ruta</option>
@@ -132,14 +160,51 @@ document.addEventListener('change', async (e) => {
   }
 });
 
+// El avance de los viajes es información complementaria: si su consulta falla, el mapa sigue mostrando los vehículos
+// (con el último avance conocido) en vez de quedarse sin nada.
+async function fetchTripProgress() {
+  try {
+    return await FleetAPI.getTripProgress();
+  } catch (err) {
+    console.warn('No se pudo consultar el avance de los viajes:', err.message);
+    return progressCache;
+  }
+}
+
 async function refreshVehicles(silent) {
   try {
-    vehiclesCache = await FleetAPI.getVehicles();
+    // Las dos consultas son independientes: se lanzan juntas para que el refresco tarde lo de la más lenta y no la suma.
+    const [vehicles, trips] = await Promise.all([FleetAPI.getVehicles(), fetchTripProgress()]);
+    vehiclesCache = vehicles;
+    progressCache = trips;
+    tripByVehicleId = new Map(trips.map(trip => [trip.vehicleId, trip]));
     renderVehicleList();
+    renderTripRoutes();
     renderMarkers();
   } catch (err) {
     if (!silent) showToast(err.message, 'error');
   }
+}
+
+// Dibuja el recorrido (línea y paradas) de cada viaje activo y retira el de los que terminaron. Solo reconstruye la capa
+// de un viaje cuando cambia su forma o su estado, no en cada refresco.
+function renderTripRoutes() {
+  const activeRouteIds = new Set(progressCache.map(trip => trip.routeId));
+
+  progressCache.forEach(trip => {
+    const signature = TripRouteLayer.signature(trip.stops, trip.routeStatus);
+    const drawn = tripRouteLayers.get(trip.routeId);
+    if (drawn && drawn.signature === signature) return;
+
+    if (drawn) map.removeLayer(drawn.layer);
+    tripRouteLayers.set(trip.routeId, { signature, layer: TripRouteLayer.build(trip.stops, trip.routeStatus).addTo(map) });
+  });
+
+  tripRouteLayers.forEach((drawn, routeId) => {
+    if (activeRouteIds.has(routeId)) return;
+    map.removeLayer(drawn.layer);
+    tripRouteLayers.delete(routeId);
+  });
 }
 
 function renderMarkers() {
@@ -147,12 +212,14 @@ function renderMarkers() {
   vehiclesCache.forEach(v => {
     seen.add(v.id);
     const latlng = [v.latitude, v.longitude];
-    if (markers[v.id]) {
-      markers[v.id].setLatLng(latlng);
-      markers[v.id].setIcon(vehicleDivIcon(v));
-      markers[v.id].getPopup().setContent(popupHtml(v));
+    const icon = vehicleDivIcon(v);
+    const marker = markers[v.id];
+    if (marker) {
+      MarkerMotion.glide(marker, latlng, POLL_INTERVAL_MS);
+      if (marker.options.icon !== icon) marker.setIcon(icon);
+      marker.getPopup().setContent(popupHtml(v));
     } else {
-      markers[v.id] = L.marker(latlng, { icon: vehicleDivIcon(v) }).addTo(map).bindPopup(popupHtml(v));
+      markers[v.id] = L.marker(latlng, { icon }).addTo(map).bindPopup(popupHtml(v));
     }
   });
   Object.keys(markers).forEach(id => {
@@ -181,6 +248,7 @@ function renderVehicleList() {
         <span>${escapeHtml(v.brand)} ${escapeHtml(v.model)}</span>
         <span>${VEHICLE_STATUS_LABELS[v.status] || v.status}</span>
       </div>
+      ${tripProgressHtml(v, TripProgressUI.compactHtml)}
     </div>
   `).join('');
 
@@ -717,5 +785,5 @@ document.getElementById('refreshAuditBtn').addEventListener('click', refreshAudi
   try { driversCache = await FleetAPI.getDrivers(); } catch { /* se listará vacío si falla */ }
 
   // Monitoreo en tiempo real simulado: se vuelve a consultar la API periódicamente.
-  pollTimer = setInterval(() => refreshVehicles(true), 5000);
+  pollTimer = setInterval(() => refreshVehicles(true), POLL_INTERVAL_MS);
 })();

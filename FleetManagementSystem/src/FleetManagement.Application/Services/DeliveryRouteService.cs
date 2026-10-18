@@ -1,5 +1,6 @@
 using FleetManagement.Application.Builders;
 using FleetManagement.Application.DTOs;
+using FleetManagement.Application.Geo;
 using FleetManagement.Application.Interfaces;
 using FleetManagement.Application.Interfaces.Repositories;
 using FleetManagement.Application.Interfaces.Services;
@@ -192,20 +193,12 @@ public class DeliveryRouteService : IDeliveryRouteService
         return (Math.Round(totalKm, 2), Math.Round(minutes, 1));
     }
 
-    /// <summary>Distancia en línea recta entre dos coordenadas usando la fórmula de Haversine (radio terrestre 6371 km).</summary>
+    /// <summary>
+    /// Distancia en línea recta entre dos coordenadas (Haversine). Delega en <see cref="GeoMath"/>, que es la fuente
+    /// única de la fórmula también para la simulación de movimiento; el resultado es idéntico al de antes.
+    /// </summary>
     private static double HaversineDistanceKm((double lat, double lng) a, (double lat, double lng) b)
-    {
-        const double earthRadiusKm = 6371.0;
-        var dLat = ToRadians(b.lat - a.lat);
-        var dLng = ToRadians(b.lng - a.lng);
-        var h = Math.Sin(dLat / 2) * Math.Sin(dLat / 2) +
-                Math.Cos(ToRadians(a.lat)) * Math.Cos(ToRadians(b.lat)) *
-                Math.Sin(dLng / 2) * Math.Sin(dLng / 2);
-        var c = 2 * Math.Atan2(Math.Sqrt(h), Math.Sqrt(1 - h));
-        return earthRadiusKm * c;
-    }
-
-    private static double ToRadians(double degrees) => degrees * Math.PI / 180.0;
+        => GeoMath.DistanceKm(new GeoCoordinate(a.lat, a.lng), new GeoCoordinate(b.lat, b.lng));
 
     // ------------------------------------------------------------------
     // Mapeo a DTOs
