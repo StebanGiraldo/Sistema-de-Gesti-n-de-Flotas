@@ -61,6 +61,9 @@
         <div class="panel-toolbar">
           <h2>Rutas de reparto <span class="text-muted text-sm">— optimización y asignación de cargas</span></h2>
           <div class="flex gap-8">
+            <button id="undoCommandBtn" class="btn btn-ghost btn-sm btn-history" disabled title="No hay nada que deshacer">↶ Deshacer</button>
+            <button id="redoCommandBtn" class="btn btn-ghost btn-sm btn-history" disabled title="No hay nada que rehacer">↷ Rehacer</button>
+            <button id="planDispatchBtn" class="btn btn-secondary btn-sm" title="Repartir entregas entre los vehículos disponibles">🧭 Planificar reparto</button>
             <button id="createExpressRouteBtn" class="btn btn-secondary btn-sm">⚡ Ruta express</button>
             <button id="createRouteBtn" class="btn btn-primary btn-sm">+ Nueva ruta</button>
           </div>
@@ -143,5 +146,7 @@
 <script src="js/api.js"></script>
 <script src="js/auth.js"></script>
 <script src="js/dashboard.js"></script>
+<script src="js/dispatch.js"></script>
+<script src="js/commands.js"></script>
 </body>
 </html>

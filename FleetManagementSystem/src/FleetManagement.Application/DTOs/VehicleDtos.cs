@@ -16,7 +16,8 @@ public record VehicleDto(
     Guid? AssignedDriverId,
     string? AssignedDriverName,
     DateTime RegisteredAt,
-    DateTime? LastMaintenanceDate
+    DateTime? LastMaintenanceDate,
+    double? CapacityM3 = null
 );
 
 public record CreateVehicleRequest(

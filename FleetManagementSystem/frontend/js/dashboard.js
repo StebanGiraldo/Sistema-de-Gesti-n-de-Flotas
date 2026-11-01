@@ -65,15 +65,24 @@ function showToast(message, type = 'info') {
   setTimeout(() => toast.remove(), 4500);
 }
 
-function openModal(innerHtml) {
+// Lo que un modal deja vivo fuera de su HTML (p. ej. un minimapa de Leaflet) se limpia al cerrarlo: se registra con onModalClose.
+const modalCloseHooks = [];
+function onModalClose(hook) {
+  modalCloseHooks.push(hook);
+}
+
+// options.wide: modal ancho, para los que muestran tablas o un mapa; options.medium: formularios con varias columnas.
+function openModal(innerHtml, options = {}) {
   const root = document.getElementById('modalRoot');
-  root.innerHTML = `<div class="modal-overlay" id="activeModalOverlay"><div class="modal-box">${innerHtml}</div></div>`;
+  const size = options.wide ? ' modal-wide' : options.medium ? ' modal-medium' : '';
+  root.innerHTML = `<div class="modal-overlay" id="activeModalOverlay"><div class="modal-box${size}">${innerHtml}</div></div>`;
   document.getElementById('activeModalOverlay').addEventListener('click', (e) => {
     if (e.target.id === 'activeModalOverlay') closeModal();
   });
 }
 function closeModal() {
   document.getElementById('modalRoot').innerHTML = '';
+  modalCloseHooks.splice(0).forEach(hook => hook());
 }
 
 // ---------------------------------------------------------------------
@@ -94,12 +103,17 @@ document.querySelectorAll('.tab-btn').forEach(btn => btn.addEventListener('click
 // ---------------------------------------------------------------------
 // Mapa y vehículos (monitoreo en tiempo real)
 // ---------------------------------------------------------------------
-function initMap() {
-  map = L.map('map', { zoomControl: true }).setView([7.1193, -73.1227], 7);
+// Mosaicos de fondo: los comparten el mapa principal y los minimapas de los modales de optimización (dispatch.js).
+function addBaseTiles(target) {
   L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
     maxZoom: 19
-  }).addTo(map);
+  }).addTo(target);
+}
+
+function initMap() {
+  map = L.map('map', { zoomControl: true }).setView([7.1193, -73.1227], 7);
+  addBaseTiles(map);
 }
 
 // FLYWEIGHT (ver README, sección 8.9): el ícono solo depende del tipo y del estado del vehículo, así que hay a lo sumo
@@ -156,6 +170,7 @@ document.addEventListener('change', async (e) => {
       await refreshVehicles(true);
     } catch (err) {
       showToast(err.message, 'error');
+      await refreshVehicles(true); // el select vuelve al estado real del vehículo
     }
   }
 });
@@ -385,10 +400,16 @@ function renderRoutesTable() {
       <td class="cell-muted">${r.estimatedDistanceKm} km · ${Math.round(r.estimatedDurationMinutes)} min</td>
       <td class="cell-muted">${r.scheduledDate ? formatDate(r.scheduledDate) : '—'}</td>
       <td class="cell-muted">${r.delayMinutes > 0 ? r.delayMinutes + ' min' : '—'}</td>
-      <td><button class="btn btn-ghost btn-sm duplicate-route-btn" data-id="${r.id}" title="Duplicar ruta (Prototype)">⧉ Duplicar</button></td>
+      <td>
+        <div class="flex gap-8">
+          ${canOptimizeRoute(r) ? `<button class="btn btn-ghost btn-sm optimize-route-btn" data-id="${r.id}" title="Buscar el mejor orden de las paradas">🧭 Optimizar</button>` : ''}
+          <button class="btn btn-ghost btn-sm duplicate-route-btn" data-id="${r.id}" title="Duplicar ruta (Prototype)">⧉ Duplicar</button>
+        </div>
+      </td>
     </tr>
   `).join('');
 
+  tbody.querySelectorAll('.optimize-route-btn').forEach(btn => btn.addEventListener('click', () => openRouteOptimizeModal(btn.dataset.id)));
   tbody.querySelectorAll('.duplicate-route-btn').forEach(btn => btn.addEventListener('click', () => duplicateRoute(btn.dataset.id)));
   tbody.querySelectorAll('.route-status-select').forEach(sel => {
     sel.addEventListener('change', async () => {
@@ -399,9 +420,15 @@ function renderRoutesTable() {
         await refreshVehicles(true);
       } catch (err) {
         showToast(err.message, 'error');
+        await refreshRoutes(); // el select vuelve al estado real de la ruta: la API rechazó el cambio
       }
     });
   });
+}
+
+// Optimizar solo tiene sentido con al menos 2 paradas intermedias que reordenar, y en rutas que no terminaron.
+function canOptimizeRoute(route) {
+  return route.waypoints.length >= 2 && route.status !== 'Completed' && route.status !== 'Cancelled';
 }
 
 async function duplicateRoute(routeId) {
@@ -414,9 +441,43 @@ async function duplicateRoute(routeId) {
   }
 }
 
+// Un vehículo en mantenimiento o fuera de servicio no se puede asignar a una ruta: se muestra deshabilitado y con su estado.
+// La capacidad va en la opción para poder avisar, antes de enviar, si la carga no cabe (la API lo vuelve a comprobar).
+function vehicleOptionHtml(v) {
+  const blocked = v.status === 'Maintenance' || v.status === 'OutOfService';
+  const volume = v.capacityM3 != null ? ` / ${v.capacityM3} m³` : '';
+  const state = blocked ? ` — ${VEHICLE_STATUS_LABELS[v.status]}` : '';
+  return `<option value="${v.id}" ${blocked ? 'disabled' : ''} data-kg="${v.capacityKg}" data-m3="${v.capacityM3 ?? ''}">` +
+    `${escapeHtml(v.licensePlate)} · ${VEHICLE_TYPE_LABELS[v.type] || v.type} · ${v.capacityKg} kg${volume}${state}</option>`;
+}
+
 function vehicleOptionsHtml() {
-  return '<option value="">— Sin asignar —</option>' +
-    vehiclesCache.map(v => `<option value="${v.id}">${escapeHtml(v.licensePlate)} · ${VEHICLE_TYPE_LABELS[v.type] || v.type}</option>`).join('');
+  return '<option value="">— Sin asignar —</option>' + vehiclesCache.map(vehicleOptionHtml).join('');
+}
+
+// Aviso bajo el vehículo del formulario de ruta: carga acumulada frente a la capacidad del vehículo elegido.
+function updateCapacityHint() {
+  const hint = document.getElementById('capacityHint');
+  const select = document.querySelector('#createRouteForm [name="assignedVehicleId"]');
+  if (!hint || !select) return;
+
+  const round = (n) => Math.round(n * 1000) / 1000;
+  const totalKg = round(cargoDraft.reduce((sum, c) => sum + c.weightKg, 0));
+  const totalM3 = round(cargoDraft.reduce((sum, c) => sum + (c.volumeM3 || 0), 0));
+  const option = select.selectedOptions[0];
+
+  if (!option || !option.value) {
+    hint.textContent = totalKg > 0 ? `Carga: ${totalKg} kg · ${totalM3} m³` : '';
+    hint.className = 'field-hint';
+    return;
+  }
+
+  const capacityKg = parseFloat(option.dataset.kg);
+  const capacityM3 = option.dataset.m3 === '' ? null : parseFloat(option.dataset.m3);
+  const over = totalKg > capacityKg || (capacityM3 !== null && totalM3 > capacityM3);
+  hint.textContent = `Carga: ${totalKg} de ${capacityKg} kg` + (capacityM3 !== null ? ` · ${totalM3} de ${capacityM3} m³` : '') +
+    (over ? ' — supera la capacidad del vehículo' : '');
+  hint.className = over ? 'field-hint text-danger' : 'field-hint';
 }
 function driverOptionsHtml() {
   return '<option value="">— Sin asignar —</option>' +
@@ -465,6 +526,7 @@ document.getElementById('createRouteBtn').addEventListener('click', async () => 
           <div class="field-row">
             <input type="text" id="cargoDesc" placeholder="Descripción" style="flex:2;" />
             <input type="number" step="0.1" id="cargoWeight" placeholder="Kg" style="flex:1;" />
+            <input type="number" step="0.01" id="cargoVolume" placeholder="m³" style="flex:1;" />
             <select id="cargoPriority" style="flex:1;">
               <option value="Standard">Estándar</option><option value="High">Alta</option>
               <option value="Urgent">Urgente</option><option value="Fragile">Frágil</option>
@@ -474,7 +536,7 @@ document.getElementById('createRouteBtn').addEventListener('click', async () => 
         </div>
 
         <div class="field-row">
-          <div class="field"><label>Vehículo asignado</label><select name="assignedVehicleId">${vehicleOptionsHtml()}</select></div>
+          <div class="field"><label>Vehículo asignado</label><select name="assignedVehicleId">${vehicleOptionsHtml()}</select><div class="field-hint" id="capacityHint"></div></div>
           <div class="field"><label>Conductor asignado</label><select name="assignedDriverId">${driverOptionsHtml()}</select></div>
         </div>
         <div class="field"><label>Fecha programada</label><input type="date" name="scheduledDate" /></div>
@@ -484,10 +546,11 @@ document.getElementById('createRouteBtn').addEventListener('click', async () => 
         <button type="submit" class="btn btn-primary">Crear ruta (Builder)</button>
       </div>
     </form>
-  `);
+  `, { medium: true });
 
   renderWaypointsDraft();
   renderCargoDraft();
+  document.querySelector('#createRouteForm [name="assignedVehicleId"]').addEventListener('change', updateCapacityHint);
 
   document.getElementById('addWaypointBtn').addEventListener('click', () => {
     const label = document.getElementById('wpLabel').value.trim();
@@ -504,8 +567,9 @@ document.getElementById('createRouteBtn').addEventListener('click', async () => 
     const weightKg = parseFloat(document.getElementById('cargoWeight').value);
     const priority = document.getElementById('cargoPriority').value;
     if (!description || Number.isNaN(weightKg)) { showToast('Complete la descripción y el peso del artículo.', 'error'); return; }
-    cargoDraft.push({ description, weightKg, volumeM3: 0, priority });
-    document.getElementById('cargoDesc').value = ''; document.getElementById('cargoWeight').value = '';
+    const volumeM3 = parseFloat(document.getElementById('cargoVolume').value) || 0;
+    cargoDraft.push({ description, weightKg, volumeM3, priority });
+    document.getElementById('cargoDesc').value = ''; document.getElementById('cargoWeight').value = ''; document.getElementById('cargoVolume').value = '';
     renderCargoDraft();
   });
 
@@ -514,7 +578,7 @@ document.getElementById('createRouteBtn').addEventListener('click', async () => 
     const fd = new FormData(e.target);
     const scheduledDateRaw = fd.get('scheduledDate');
     try {
-      await FleetAPI.createRoute({
+      await FleetAPI.commandCreateRoute({
         name: fd.get('name'),
         originLat: parseFloat(fd.get('originLat')), originLng: parseFloat(fd.get('originLng')),
         destinationLat: parseFloat(fd.get('destinationLat')), destinationLng: parseFloat(fd.get('destinationLng')),
@@ -526,6 +590,7 @@ document.getElementById('createRouteBtn').addEventListener('click', async () => 
       closeModal();
       showToast('Ruta creada paso a paso (patrón Builder).', 'success');
       await refreshRoutes();
+      await refreshCommandHistory();
     } catch (err) {
       showToast(err.message, 'error');
     }
@@ -552,10 +617,11 @@ function renderWaypointsDraft() {
 function renderCargoDraft() {
   const el = document.getElementById('cargoList');
   if (!el) return;
+  updateCapacityHint();
   if (cargoDraft.length === 0) { el.innerHTML = '<p class="dynamic-list-empty">Sin artículos agregados.</p>'; return; }
   el.innerHTML = cargoDraft.map((c, i) => `
     <div class="dynamic-list-row">
-      <span class="row-text">${escapeHtml(c.description)} — ${c.weightKg} kg · ${CARGO_PRIORITY_LABELS[c.priority] || c.priority}</span>
+      <span class="row-text">${escapeHtml(c.description)} — ${c.weightKg} kg · ${c.volumeM3} m³ · ${CARGO_PRIORITY_LABELS[c.priority] || c.priority}</span>
       <button type="button" class="dynamic-list-remove" data-index="${i}">✕</button>
     </div>
   `).join('');
@@ -585,7 +651,7 @@ document.getElementById('createExpressRouteBtn').addEventListener('click', async
           <div class="field"><label>Destino lng</label><input required type="number" step="0.0001" name="destinationLng" value="-73.1716" /></div>
         </div>
         <div class="field-row">
-          <div class="field"><label>Vehículo</label><select required name="assignedVehicleId">${vehiclesCache.map(v => `<option value="${v.id}">${escapeHtml(v.licensePlate)}</option>`).join('')}</select></div>
+          <div class="field"><label>Vehículo</label><select required name="assignedVehicleId">${vehiclesCache.map(vehicleOptionHtml).join('')}</select></div>
           <div class="field"><label>Conductor</label><select required name="assignedDriverId">${driversCache.map(d => `<option value="${d.id}">${escapeHtml(d.fullName)}</option>`).join('')}</select></div>
         </div>
       </div>

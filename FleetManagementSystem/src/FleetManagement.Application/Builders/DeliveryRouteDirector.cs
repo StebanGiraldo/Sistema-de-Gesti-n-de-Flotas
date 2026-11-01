@@ -13,6 +13,11 @@ namespace FleetManagement.Application.Builders;
 /// </summary>
 public class DeliveryRouteDirector
 {
+    /// <summary>Carga fija de toda ruta express. Son constantes para que quien valida la asignación use los mismos valores.</summary>
+    public const string ExpressCargoDescription = "Envío urgente";
+    public const double ExpressCargoWeightKg = 50;
+    public const double ExpressCargoVolumeM3 = 0.2;
+
     public DeliveryRoute BuildExpressRoute(
         IDeliveryRouteBuilder builder,
         string name,
@@ -29,7 +34,7 @@ public class DeliveryRouteDirector
             .WithDestination(destinationLat, destinationLng)
             .AssignVehicle(vehicleId)
             .AssignDriver(driverId)
-            .AddCargoItem("Envío urgente", 50, 0.2, CargoPriority.Urgent)
+            .AddCargoItem(ExpressCargoDescription, ExpressCargoWeightKg, ExpressCargoVolumeM3, CargoPriority.Urgent)
             .ScheduleFor(DateTime.UtcNow)
             .WithEstimatedTrip(estimatedDistanceKm, estimatedDurationMinutes)
             .Build();

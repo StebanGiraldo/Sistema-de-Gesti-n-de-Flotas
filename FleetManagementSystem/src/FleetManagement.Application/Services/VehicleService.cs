@@ -178,6 +178,6 @@ public class VehicleService : IVehicleService
         return new VehicleDto(
             v.Id, v.LicensePlate, v.Brand, v.Model, v.Year, v.Type.ToString(), v.Status.ToString(),
             v.CapacityKg, v.MileageKm, v.CurrentLocation.Y, v.CurrentLocation.X,
-            v.AssignedDriverId, driver?.FullName, v.RegisteredAt, v.LastMaintenanceDate);
+            v.AssignedDriverId, driver?.FullName, v.RegisteredAt, v.LastMaintenanceDate, v.CapacityM3);
     }
 }

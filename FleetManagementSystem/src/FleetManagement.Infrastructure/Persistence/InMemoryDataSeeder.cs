@@ -44,19 +44,19 @@ public static class InMemoryDataSeeder
         await driverRepo.AddAsync(driver2);
 
         // --- Vehículos (coordenadas de Santander y otras ciudades de Colombia) ---
-        var truck = new Vehicle { LicensePlate = "TRK-001", Brand = "Volvo", Model = "FH 460", Year = 2022, Type = VehicleType.Truck, CapacityKg = 8000, Status = VehicleStatus.Available, MileageKm = 45210 };
+        var truck = new Vehicle { LicensePlate = "TRK-001", Brand = "Volvo", Model = "FH 460", Year = 2022, Type = VehicleType.Truck, CapacityKg = 8000, CapacityM3 = 40, Status = VehicleStatus.Available, MileageKm = 45210 };
         truck.UpdateLocation(7.1193, -73.1227); // Bucaramanga
 
-        var van = new Vehicle { LicensePlate = "VAN-002", Brand = "Renault", Model = "Master", Year = 2023, Type = VehicleType.Van, CapacityKg = 1500, Status = VehicleStatus.EnRoute, MileageKm = 18340, AssignedDriverId = driver1.Id };
+        var van = new Vehicle { LicensePlate = "VAN-002", Brand = "Renault", Model = "Master", Year = 2023, Type = VehicleType.Van, CapacityKg = 1500, CapacityM3 = 10, Status = VehicleStatus.EnRoute, MileageKm = 18340, AssignedDriverId = driver1.Id };
         van.UpdateLocation(7.0806, -73.1716); // Girón
 
-        var car = new Vehicle { LicensePlate = "CAR-003", Brand = "Chevrolet", Model = "N300", Year = 2021, Type = VehicleType.Car, CapacityKg = 400, Status = VehicleStatus.Maintenance, MileageKm = 62870 };
+        var car = new Vehicle { LicensePlate = "CAR-003", Brand = "Chevrolet", Model = "N300", Year = 2021, Type = VehicleType.Car, CapacityKg = 400, CapacityM3 = 3.5, Status = VehicleStatus.Maintenance, MileageKm = 62870 };
         car.UpdateLocation(4.7110, -74.0721); // Bogotá
 
-        var moto = new Vehicle { LicensePlate = "MOT-004", Brand = "AKT", Model = "NKD 125", Year = 2023, Type = VehicleType.Motorcycle, CapacityKg = 30, Status = VehicleStatus.Available, MileageKm = 9120, AssignedDriverId = driver2.Id };
+        var moto = new Vehicle { LicensePlate = "MOT-004", Brand = "AKT", Model = "NKD 125", Year = 2023, Type = VehicleType.Motorcycle, CapacityKg = 30, CapacityM3 = 0.3, Status = VehicleStatus.Available, MileageKm = 9120, AssignedDriverId = driver2.Id };
         moto.UpdateLocation(6.2442, -75.5812); // Medellín
 
-        var van2 = new Vehicle { LicensePlate = "VAN-005", Brand = "Renault", Model = "Kangoo", Year = 2020, Type = VehicleType.Van, CapacityKg = 1200, Status = VehicleStatus.OutOfService, MileageKm = 98450 };
+        var van2 = new Vehicle { LicensePlate = "VAN-005", Brand = "Renault", Model = "Kangoo", Year = 2020, Type = VehicleType.Van, CapacityKg = 1200, CapacityM3 = 4, Status = VehicleStatus.OutOfService, MileageKm = 98450 };
         van2.UpdateLocation(3.4516, -76.5320); // Cali
 
         await vehicleRepo.AddAsync(truck);

@@ -26,6 +26,10 @@ public class Vehicle : IPrototype<Vehicle>
     public VehicleType Type { get; set; }
     public VehicleStatus Status { get; set; } = VehicleStatus.Available;
     public double CapacityKg { get; set; }
+
+    /// <summary>Volumen de carga que cabe en el vehículo (m³). <c>null</c> = no declarado: entonces no se valida el volumen.</summary>
+    public double? CapacityM3 { get; set; }
+
     public double MileageKm { get; set; }
 
     /// <summary>Posición GPS actual del vehículo.</summary>
@@ -63,6 +67,7 @@ public class Vehicle : IPrototype<Vehicle>
             Type = Type,
             Status = VehicleStatus.Available,
             CapacityKg = CapacityKg,
+            CapacityM3 = CapacityM3,
             MileageKm = 0,
             CurrentLocation = new Point(CurrentLocation.X, CurrentLocation.Y) { SRID = 4326 },
             AssignedDriverId = null,

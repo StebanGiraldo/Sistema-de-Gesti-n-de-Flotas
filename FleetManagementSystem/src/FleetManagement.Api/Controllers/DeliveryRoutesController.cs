@@ -103,5 +103,9 @@ public class DeliveryRoutesController : ControllerBase
         {
             return BadRequest(new { message = ex.Message });
         }
+        catch (InvalidOperationException ex) // regla de asignación incumplida (vehículo en mantenimiento, ya en otro viaje...)
+        {
+            return BadRequest(new { message = ex.Message });
+        }
     }
 }

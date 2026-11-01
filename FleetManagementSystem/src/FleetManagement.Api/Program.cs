@@ -1,15 +1,20 @@
 using FleetManagement.Api.Middleware;
+using FleetManagement.Application.AlertHandling;
+using FleetManagement.Application.Assignment;
 using FleetManagement.Application.Builders;
+using FleetManagement.Application.Commands;
 using FleetManagement.Application.Facades;
 using FleetManagement.Application.Factories;
 using FleetManagement.Application.Flyweights;
 using FleetManagement.Application.Interfaces;
 using FleetManagement.Application.Interfaces.Repositories;
 using FleetManagement.Application.Interfaces.Services;
+using FleetManagement.Application.Optimization;
 using FleetManagement.Application.Reports;
 using FleetManagement.Application.Services;
 using FleetManagement.Application.Simulation;
 using FleetManagement.Infrastructure.BackgroundServices;
+using FleetManagement.Infrastructure.Commands;
 using FleetManagement.Infrastructure.Logging;
 using FleetManagement.Infrastructure.Navigation;
 using FleetManagement.Infrastructure.Notifications;
@@ -149,9 +154,59 @@ builder.Services.AddSingleton<INotificationChannel, EmailNotificationChannel>();
 //     recomendado por ASP.NET Core para servicios de negocio por petición. ---
 builder.Services.AddScoped<IVehicleService, VehicleService>();
 builder.Services.AddScoped<IDriverService, DriverService>();
-builder.Services.AddScoped<IDeliveryRouteService, DeliveryRouteService>();
+// DECORATOR: las reglas de asignación (capacidad, disponibilidad, doble asignación) se comprueban ANTES de delegar en
+// el servicio real de rutas. Todo el que pida IDeliveryRouteService (controladores, simulador) recibe la versión protegida.
+builder.Services.AddScoped<IRouteAssignmentValidator, RouteAssignmentValidator>();
+builder.Services.AddScoped<DeliveryRouteService>();
+builder.Services.AddScoped<IDeliveryRouteService>(provider => new AssignmentValidatingRouteService(
+    provider.GetRequiredService<DeliveryRouteService>(),
+    provider.GetRequiredService<IRouteAssignmentValidator>()));
+
+// STRATEGY (patrón de comportamiento): optimización de rutas y asignación de cargas (requerimiento #2). Las estrategias no
+// guardan estado, por eso son Singleton; los servicios que las usan son Scoped como el resto de casos de uso. El optimizador
+// de paradas es vecino más cercano mejorado con 2-opt; la asignación es "best fit" con prioridades.
+builder.Services.AddSingleton<IRouteOptimizer>(new TwoOptRouteOptimizer(new NearestNeighborRouteOptimizer()));
+builder.Services.AddSingleton<ICargoAssignmentStrategy, PriorityBestFitStrategy>();
+builder.Services.AddSingleton<IStopSequencer>(provider => new PriorityStopSequencer(provider.GetRequiredService<IRouteOptimizer>()));
+builder.Services.AddSingleton(provider => new DispatchPlanner(
+    provider.GetRequiredService<ICargoAssignmentStrategy>(),
+    provider.GetRequiredService<IStopSequencer>()));
+builder.Services.AddScoped<IDispatchPlanningService, DispatchPlanningService>();
+builder.Services.AddScoped<IRouteOptimizationService, RouteOptimizationService>();
 builder.Services.AddScoped<IMaintenanceService, MaintenanceService>();
-builder.Services.AddScoped<ITripAlertService, TripAlertService>();
+
+// CHAIN OF RESPONSIBILITY (patrón de comportamiento): reportar una alerta pasa por una cadena de manejadores (validar →
+// registrar → clasificar → escalar según la gravedad). Como con las reglas de asignación, se coloca DELANTE del servicio
+// real sin modificarlo: TripAlertService (con su Bridge y sus Decorators de notificación) sigue siendo quien registra y
+// avisa a operaciones, y solo se registra como clase concreta para poder entregárselo a la cadena. Las reglas (límites,
+// umbral de retraso grave, destinatarios del escalamiento) salen de la sección "AlertHandling" y se validan al arrancar.
+// El orden de la cadena está en DefaultAlertHandlerChain.
+builder.Services.AddOptions<AlertHandlingOptions>()
+    .Bind(builder.Configuration.GetSection(AlertHandlingOptions.SectionName))
+    .ValidateDataAnnotations()
+    .ValidateOnStart();
+builder.Services.AddSingleton(provider => provider.GetRequiredService<IOptions<AlertHandlingOptions>>().Value);
+builder.Services.AddScoped<TripAlertService>();
+builder.Services.AddScoped<ITripAlertService>(provider =>
+{
+    var alerts = provider.GetRequiredService<TripAlertService>();
+    var chain = DefaultAlertHandlerChain.Create(
+        provider.GetRequiredService<AlertHandlingOptions>(),
+        alerts,
+        provider.GetRequiredService<INotificationChannel>(),
+        provider.GetRequiredService<IFleetAuditLogger>());
+    return new AlertHandlingTripAlertService(alerts, chain);
+});
+
+// COMMAND (patrón de comportamiento): crear una ruta, aplicar el orden optimizado y aplicar el plan de reparto se pueden
+// pedir como órdenes (api/commands) que se guardan en el historial de quien las pidió y se deshacen o rehacen. El historial
+// es Singleton (debe vivir más que una petición) y los comandos se arman por petición (Scoped), con los mismos servicios
+// de siempre: los endpoints anteriores no cambian. Deshacer una ruta creada la cancela (no se borra: la auditoría se conserva).
+builder.Services.AddSingleton<ICommandHistoryStore>(new InMemoryCommandHistoryStore());
+builder.Services.AddScoped<IRouteSnapshotService, RouteSnapshotService>();
+builder.Services.AddScoped<IPlannedRouteCanceller, PlannedRouteCanceller>();
+builder.Services.AddScoped<IRouteCommandFactory, RouteCommandFactory>();
+builder.Services.AddScoped<ICommandInvoker, CommandInvoker>();
 builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<INavigationService, NavigationService>();
 

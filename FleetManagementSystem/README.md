@@ -32,6 +32,10 @@ Operador), un dashboard administrativo y un portal para conductores.
    - [8.8 Decorator de reportes y Facade del resumen](#88-decorator-de-reportes-y-facade-del-resumen)
    - [8.9 Flyweight — perfiles compartidos por tipo de vehículo](#89-flyweight--perfiles-compartidos-por-tipo-de-vehículo)
    - [8.10 Proxy — caché del proveedor de navegación](#810-proxy--caché-del-proveedor-de-navegación)
+   - [8.11 Strategy — optimizar paradas y repartir cargas](#811-strategy--optimizar-paradas-y-repartir-cargas)
+   - [8.12 Decorator — reglas de asignación sobre el servicio de rutas](#812-decorator--reglas-de-asignación-sobre-el-servicio-de-rutas)
+   - [8.13 Command — deshacer y rehacer operaciones de rutas](#813-command--deshacer-y-rehacer-operaciones-de-rutas)
+   - [8.14 Chain of Responsibility — de la alerta reportada a quien debe atenderla](#814-chain-of-responsibility--de-la-alerta-reportada-a-quien-debe-atenderla)
 9. [Documentación de la API REST](#9-documentación-de-la-api-rest)
 10. [Notas sobre paso a producción](#10-notas-sobre-paso-a-producción)
 11. [Limitaciones conocidas del prototipo](#11-limitaciones-conocidas-del-prototipo)
@@ -44,7 +48,7 @@ Operador), un dashboard administrativo y un portal para conductores.
 | # | Módulo | Requerimiento | Dónde vive |
 |---|--------|----------------|------------|
 | 1 | **Monitoreo en tiempo real** | Ver ubicación y estado de cada vehículo (disponible / en ruta / mantenimiento / fuera de servicio) y su avance sobre la ruta asignada | `FleetController` + `TripProgressController` + `VehicleSimulationBackgroundService` + pestaña "Mapa y vehículos" del dashboard |
-| 2 | **Optimización de rutas y asignación de cargas** | Crear rutas con paradas y artículos de carga, asignar vehículo/conductor, estimar distancia/tiempo | `DeliveryRoutesController` + `DeliveryRouteService` (patrón **Builder**) + pestaña "Rutas y cargas" |
+| 2 | **Optimización de rutas y asignación de cargas** | Crear rutas con paradas y artículos de carga y asignar vehículo/conductor **respetando las reglas** (capacidad en kg y m³, disponibilidad, mantenimiento vencido, sin doble asignación); **reordenar las paradas** de una ruta para recorrer menos kilómetros; **repartir un lote de entregas** entre los vehículos disponibles con un plan que se compara con el reparto simple; estimar distancia y tiempo con la velocidad del tipo de vehículo | `DeliveryRoutesController` + `DeliveryRouteService` (**Builder**) + `AssignmentValidatingRouteService` (**Decorator**, [8.12](#812-decorator--reglas-de-asignación-sobre-el-servicio-de-rutas)) + `DispatchController` y `RouteOptimizationController` (**Strategy**, [8.11](#811-strategy--optimizar-paradas-y-repartir-cargas)) + pestaña "Rutas y cargas" (botones "🧭 Planificar reparto" y "🧭 Optimizar") |
 | 3 | **Mantenimiento predictivo** | Registrar mantenimientos y detectar cuáles vehículos tienen tareas vencidas por fecha o kilometraje | `MaintenanceController` + `MaintenanceService.GetVehiclesDueForMaintenanceAsync()` + pestaña "Mantenimiento" |
 | 4 | **Integración con sistemas de navegación** | El conductor puede abrir la ruta asignada en una app de navegación real | `NavigationController` + `NavigationService` (genera enlace de Google Maps) + botón "Abrir navegación" en el portal del operador |
 
@@ -119,7 +123,7 @@ FleetManagementSystem/
 │   │
 │   ├── FleetManagement.Application/
 │   │   ├── Interfaces/Repositories/ (6 interfaces — DIP)
-│   │   ├── Interfaces/Services/ (7 interfaces — DIP)
+│   │   ├── Interfaces/Services/ (13 interfaces — DIP)
 │   │   ├── Interfaces/ (IFleetAuditLogger, IPasswordHasher, ISessionTokenStore)
 │   │   ├── DTOs/ (records de entrada/salida de la API)
 │   │   ├── Factories/  ← FACTORY METHOD + ABSTRACT FACTORY
@@ -127,7 +131,11 @@ FleetManagementSystem/
 │   │   ├── Reports/    ← DECORATOR de reportes (generador base + decoradores, sección 8.8)
 │   │   ├── Facades/    ← FACADE del resumen del dashboard (sección 8.8)
 │   │   ├── Metrics/    ← FleetMetrics: cálculos que comparten el reporte y el resumen
-│   │   ├── Geo/        ← GeoMath: distancias (Haversine) e interpolación, compartidas por rutas y simulación
+│   │   ├── Geo/        ← GeoMath (Haversine, interpolación), TripEstimate (minutos = km / velocidad) y VehicleSpeed: compartidos por rutas, simulación y plan de reparto
+│   │   ├── Assignment/ ← reglas de asignación (capacidad, disponibilidad, doble asignación) y el DECORATOR que las aplica (sección 8.12)
+│   │   ├── Optimization/ ← STRATEGY: orden de las paradas, reparto de entregas y secuencia de cada viaje (sección 8.11)
+│   │   ├── Commands/   ← COMMAND: órdenes que se pueden deshacer y rehacer, su invocador y el historial por usuario (sección 8.13)
+│   │   ├── AlertHandling/ ← CHAIN OF RESPONSIBILITY: validar, registrar, clasificar y escalar una alerta (sección 8.14)
 │   │   ├── Simulation/ ← simulación del recorrido sobre la ruta asignada (secciones 5.3 y 10)
 │   │   ├── Flyweights/ ← FLYWEIGHT: perfil compartido por tipo de vehículo (sección 8.9)
 │   │   └── Services/   (servicios: casos de uso)
@@ -138,25 +146,30 @@ FleetManagementSystem/
 │   │   ├── Security/ (PasswordHasher, InMemorySessionTokenStore)
 │   │   ├── Navigation/ ← GoogleMapsAdapter (Adapter) + CachingNavigationProviderProxy y su caché (PROXY, sección 8.10)
 │   │   ├── Simulation/ (InMemoryTripProgressTracker: avance de los viajes, en memoria)
+│   │   ├── Commands/ (InMemoryCommandHistoryStore: un historial de órdenes por usuario, en memoria)
 │   │   └── BackgroundServices/VehicleSimulationBackgroundService.cs  (temporizador de la simulación)
 │   │
 │   └── FleetManagement.Api/
 │       ├── Program.cs                 ← Composition Root (Inyección de Dependencias)
-│       ├── Controllers/ (13 controladores REST)
+│       ├── Controllers/ (16 controladores REST)
 │       ├── Middleware/TokenAuthenticationMiddleware.cs
 │       └── Filters/RequireRoleAttribute.cs
 │
 ├── tests/
-│   └── FleetManagement.Application.Tests/     ← pruebas xUnit del Factory Method (sección 12)
-│       └── Factories/ (VehicleFactoryTests, VehicleFactoryProviderTests,
-│                       VehicleServiceFactoryMethodTests)
+│   └── FleetManagement.Application.Tests/     ← pruebas xUnit de todo el proyecto (sección 12)
+│       ├── Factories/, Builders/, Prototype/, Adapter/, Bridge/, Composite/, Decorator/, ReportDecorator/, Facade/
+│       ├── Metrics/, Flyweight/, Proxy/, Simulation/, Geo/, Architecture/, Support/
+│       ├── Assignment/    ← reglas de asignación y su Decorator (sección 8.12)
+│       ├── Optimization/  ← Strategy: orden de paradas, reparto, plan y optimización de una ruta (sección 8.11)
+│       ├── Command/       ← Command: historial, invocador, órdenes de rutas, foto de paradas y cancelador (sección 8.13)
+│       └── AlertHandling/ ← Chain of Responsibility: cadena, manejadores, política de gravedad, opciones y decorador (sección 8.14)
 │
 └── frontend/
     ├── login.html
     ├── dashboard.html                 (panel administrativo — SPA)
     ├── operator.html                  (portal del conductor)
     ├── css/styles.css
-    └── js/ (api.js, auth.js, dashboard.js, operator.js)
+    └── js/ (api.js, auth.js, dashboard.js, dispatch.js [plan de reparto y optimizar paradas], commands.js [deshacer y rehacer], operator.js)
 ```
 
 ---
@@ -227,6 +240,10 @@ se configuran, valen los valores por defecto:
 | `Simulation:DelayedSpeedFactor` | `0.5` | Fracción de la velocidad normal con la que avanza una ruta en estado `Delayed` (mayor que 0 y hasta 1). |
 | `NavigationCache:TimeToLiveMinutes` | `10` | Minutos que se considera vigente una URL de navegación guardada (mayor que 0 y hasta 10 080, una semana). |
 | `NavigationCache:MaxEntries` | `500` | Máximo de URLs guardadas a la vez (al menos 1). |
+
+Las reglas de las alertas (`AlertHandling:*`: límites de la descripción y del retraso, umbral de retraso grave y destinatarios
+del escalamiento) se leen y se validan de la misma manera; sus claves y valores por defecto están en la
+[sección 8.14](#814-chain-of-responsibility--de-la-alerta-reportada-a-quien-debe-atenderla).
 
 Para una demostración, lo más cómodo son las variables de entorno (el doble guion bajo
 equivale a `:`). El viaje de demostración de `VAN-002` (6,955 km a 100 km/h) dura unos
@@ -562,6 +579,10 @@ pasan de "volver a diligenciar todos los campos" a "clonar y ajustar dos datos".
 | Facade (`FleetDashboardFacade`) | `GET /api/dashboard/summary` | — |
 | Flyweight (`IVehicleTypeProfileFactory` → `VehicleTypeProfile`) | `GET /api/fleet/vehicle-types`; además lo usa por dentro el simulador, cuyo resultado se ve en `GET /api/progress` | Marcadores del mapa (un ícono compartido por tipo y estado) |
 | Proxy (`CachingNavigationProviderProxy`) | `GET /api/navigation/route/{routeId}` (el mismo endpoint del Adapter: la segunda consulta de la misma ruta sale del caché) | Enlace de navegación de la ruta |
+| Strategy (`IRouteOptimizer`, `ICargoAssignmentStrategy`, `IStopSequencer`) | `POST /api/dispatch/plan`, `POST /api/dispatch/apply`, `GET` y `POST /api/routes/{id}/optimization` | "🧭 Planificar reparto" / "🧭 Optimizar" |
+| Decorator de reglas de asignación (`AssignmentValidatingRouteService`) | `POST /api/routes`, `POST /api/routes/express`, `PATCH /api/routes/{id}/status` (responden 400 con los mensajes de las reglas incumplidas) | "+ Nueva ruta" (aviso rojo de capacidad), cambio de estado de la ruta |
+| Command (`ICommand<T>` / `IUndoableCommand<T>` + `CommandInvoker`) | `POST /api/commands/routes`, `POST /api/commands/routes/{id}/optimization`, `POST /api/commands/dispatch/apply`, `GET /api/commands/history`, `POST /api/commands/undo`, `POST /api/commands/redo` | «+ Nueva ruta», «Crear rutas del plan», «Aplicar este orden» y los botones «↶ Deshacer» / «↷ Rehacer» |
+| Chain of Responsibility (`IAlertHandler` + `AlertHandlingTripAlertService`) | `POST /api/alerts` (la alerta pasa por la cadena; las graves y críticas generan un aviso de escalamiento visible en `GET /api/audit/logs`) | «🚨 Reportar complicación» del portal del conductor |
 
 ### 8.7 Patrones estructurales: Adapter, Bridge, Composite y Decorator
 
@@ -784,6 +805,497 @@ sujeto: `dotnet test --filter "FullyQualifiedName~Proxy"`. Cubren que la segunda
 una clave distinta sí, el vencimiento por tiempo de vida (con un reloj manual), el tamaño máximo, que los errores no se
 guardan, la transparencia frente al `GoogleMapsAdapter` real y el conjunto con el `NavigationService` real.
 
+### 8.11 Strategy — optimizar paradas y repartir cargas
+
+Requerimiento #2 (optimización de rutas y asignación de cargas). Hay tres decisiones que se pueden resolver de más de una
+manera, y cada una es una **estrategia intercambiable** detrás de una interfaz: el Composition Root (`Program.cs`) elige
+cuál se usa y los servicios no lo saben. Viven en `Application/Optimization/` y son **puras** (reciben datos y devuelven un
+resultado, sin repositorios ni reloj), por eso se prueban sin infraestructura.
+
+| Estrategia (interfaz) | Implementaciones | Qué decide |
+|-----------------------|------------------|------------|
+| `IRouteOptimizer` | `NearestNeighborRouteOptimizer` (vecino más cercano) · `TwoOptRouteOptimizer` (recibe otro optimizador como punto de partida y lo mejora con 2-opt) | En qué **orden** visitar unas paradas desde un origen, con o sin destino fijo. |
+| `ICargoAssignmentStrategy` | `PriorityBestFitStrategy` (la del plan) · `FirstFitInOrderStrategy` (la línea base "sin optimizar") | A qué **vehículo** va cada entrega. |
+| `IStopSequencer` | `PriorityStopSequencer` (urgentes primero, luego el camino más corto) · `GivenOrderStopSequencer` (el orden recibido) | En qué orden recorre cada vehículo sus entregas. |
+
+`DispatchPlanner` junta las dos últimas (primero asigna, luego ordena). Registro en `Program.cs`:
+
+```csharp
+builder.Services.AddSingleton<IRouteOptimizer>(new TwoOptRouteOptimizer(new NearestNeighborRouteOptimizer()));
+builder.Services.AddSingleton<ICargoAssignmentStrategy, PriorityBestFitStrategy>();
+builder.Services.AddSingleton<IStopSequencer>(provider => new PriorityStopSequencer(provider.GetRequiredService<IRouteOptimizer>()));
+builder.Services.AddSingleton(provider => new DispatchPlanner(
+    provider.GetRequiredService<ICargoAssignmentStrategy>(),
+    provider.GetRequiredService<IStopSequencer>()));
+```
+
+Cambiar de algoritmo es cambiar esas líneas (por ejemplo, un optimizador con distancias por carretera implementaría
+`IRouteOptimizer` sin tocar servicios ni controladores: Open/Closed).
+
+**Qué hace cada algoritmo.**
+
+- *Orden de las paradas.* El vecino más cercano va siempre a la parada pendiente más próxima (Haversine, línea recta).
+  El 2-opt toma ese recorrido y, mientras exista un tramo que puesto al revés lo acorte, lo invierte; el origen (y el
+  destino, si lo hay) quedan fijos. Solo acepta cambios que ahorran, así que **nunca devuelve algo más largo que su punto
+  de partida**.
+- *Reparto de entregas (best fit con prioridades).* Las entregas salen de una cola de prioridad (`PriorityQueue`): primero
+  las urgentes y, entre iguales, las más pesadas. Cada una va al vehículo **ya cargado** al que mejor le calza (el que queda
+  con menos espacio libre), para consolidar y usar menos vehículos; si en ninguno cabe, abre el vehículo disponible que antes
+  llega al punto de salida (cercanía y velocidad de su tipo, perfil Flyweight). Si en ninguno cabe, la entrega queda **sin
+  asignar, con su motivo**. Se respetan el peso (kg) y el volumen (m³), este último solo si el vehículo declara su capacidad.
+- *Secuencia de cada viaje.* Las urgentes se visitan primero (entre sí, por el camino más corto) y después las demás.
+  Priorizar lo urgente puede alargar el recorrido: es una decisión de negocio y el plan lo explica cuando ocurre.
+
+**Qué se puede hacer con esto.**
+
+| Caso de uso | Servicio | Endpoint | UI |
+|-------------|----------|----------|----|
+| Reordenar las paradas de una ruta ya creada | `RouteOptimizationService` | `GET /api/routes/{id}/optimization` (propone, no cambia nada) · `POST` (aplica; solo rutas planificadas) | Botón "🧭 Optimizar" en la tabla de rutas: lista actual frente a propuesta, kilómetros, minutos y mapa |
+| Repartir un lote de entregas entre los vehículos disponibles | `DispatchPlanningService` | `POST /api/dispatch/plan` (calcula) · `POST /api/dispatch/apply` (crea las rutas) | Botón "🧭 Planificar reparto" |
+
+Reglas del plan de reparto:
+
+- **Solo salen vehículos que pueden salir:** que no figuren "en ruta", sin viaje activo, que no estén en mantenimiento ni
+  fuera de servicio y sin mantenimiento vencido (la misma regla que se aplicará al crear la ruta, [8.12](#812-decorator--reglas-de-asignación-sobre-el-servicio-de-rutas)).
+  Los demás se devuelven en `excludedVehicles`, cada uno con su motivo.
+- **Se compara con el reparto simple** (`FirstFitInOrderStrategy` + `GivenOrderStopSequencer`: cada entrega al primer
+  vehículo donde cabe, en el orden recibido): vehículos usados, kilómetros y minutos antes y después. La comparación solo es
+  válida (`comparable`) si los dos planes asignan la misma cantidad de entregas; si no, se dice por qué no lo es. Si el plan
+  optimizado recorre *más* que el simple (por atender primero lo urgente, por ejemplo), `comparison.note` lo explica en vez
+  de esconderlo.
+- **Calcular no guarda nada.** `apply` vuelve a calcular el plan, **comprueba todos los viajes antes de crear el primero**
+  (todo o nada: no queda un reparto a medias) y crea una ruta **planificada** por viaje (origen = punto de salida, paradas =
+  entregas menos la última, destino = la última entrega, carga = las entregas). No inicia los viajes, no cambia el estado de
+  los vehículos y no asigna conductor.
+- El tiempo estimado usa la velocidad del tipo de vehículo ([8.9](#89-flyweight--perfiles-compartidos-por-tipo-de-vehículo)), la misma que usa la simulación.
+- Un plan admite como máximo 200 entregas.
+
+**Ejemplo con la flota de demostración** (4 entregas en Santander desde Bucaramanga, 85 kg en total): el plan usa **1 vehículo
+(TRK-001) y 35,95 km (27 min)**; el reparto simple usaría 2 vehículos y 48,53 km (36,4 min), o sea **12,58 km (25,9 %) y 9,4
+min menos**. Quedan excluidos CAR-003 (mantenimiento vencido), VAN-002 (viaje activo) y VAN-005 (fuera de servicio). En el
+mismo ejemplo, reordenar una ruta que visitaba las paradas en zig-zag pasa de 69,64 a 50,73 km (18,91 km, 27,2 % menos).
+
+**Qué tan buena es la heurística (medido con un script aparte, no es una prueba del proyecto).** Contra el mejor orden
+posible (probando todas las permutaciones), en 200 instancias aleatorias de 7 paradas:
+
+| | Vecino más cercano | Vecino más cercano + 2-opt |
+|---|---|---|
+| Con destino fijo: recorrido medio ÷ óptimo (peor caso) | 1,129 (1,493) | **1,008** (1,132) |
+| Con destino fijo: instancias en que halla el óptimo | 26 de 200 | **148 de 200** |
+| Sin destino: recorrido medio ÷ óptimo (peor caso) | 1,067 (1,315) | **1,012** (1,195) |
+| Sin destino: instancias en que halla el óptimo | 66 de 200 | **151 de 200** |
+
+El 2-opt acorta mucho lo que deja el vecino más cercano y no lo empeora nunca, pero **no garantiza el óptimo**. Por eso
+`RouteOptimizationService` solo propone un cambio si ahorra al menos 0,01 km: una ruta que ya estaba en su mejor orden no se
+empeora (hay una prueba con rutas puestas a propósito en su mejor orden, donde la heurística sí habría empeorado
+el recorrido).
+
+**Un comportamiento a conocer (decisión de negocio, no un error).** Con capacidad escasa, el reparto lleva primero lo
+urgente y lo pesado, así que puede dejar sin asignar más entregas *pequeñas* que el orden simple. Con una sola furgoneta de
+55 kg y entregas de 11, 54, 20, 26, 42, 4, 47, 35 y 4 kg, el plan lleva la de 54 kg (8 quedan sin asignar) y el orden
+simple lleva cuatro pequeñas (39 kg, 5 sin asignar). En el lote sembrado de 100 casos de las pruebas, el plan transportó más
+kilos en total (11.424 frente a 10.953 kg: más en 29 casos, menos en 3, igual en 68) y asignó todo en los 64 casos en que el
+orden simple también lo asignó todo, pero dejó **más entregas sin asignar en 15 casos** (y menos en 2). Lo que no se lleva
+siempre se informa con su motivo.
+
+### 8.12 Decorator — reglas de asignación sobre el servicio de rutas
+
+Las reglas de negocio de la asignación (qué vehículo puede llevar qué carga) viven en **un solo lugar** y se comprueban
+**antes** de crear o iniciar una ruta, sin modificar la lógica de `DeliveryRouteService` (solo se le añadió la velocidad
+por tipo de vehículo y la liberación del vehículo descrita abajo).
+
+| Pieza | Dónde está | Papel |
+|-------|------------|-------|
+| `IDeliveryRouteService` | `Application/Interfaces/Services/` (ya existía) | Interfaz del **componente**: la que usan los controladores y el simulador. |
+| `DeliveryRouteService` | `Application/Services/` | **Componente real** (Builder, Prototype, estimación de distancia y tiempo). |
+| `AssignmentValidatingRouteService` | `Application/Assignment/` | **Decorator**: valida y luego delega en el servicio real, que no se entera. Lo demás lo delega tal cual. |
+| `IRouteAssignmentValidator` / `RouteAssignmentValidator` | `Application/Assignment/` | Las reglas. Cada una es un método pequeño; el validador reúne **todas** las infracciones y lanza una sola `AssignmentRuleException` con la lista. |
+
+En `Program.cs` se registra el servicio real y `IDeliveryRouteService` se construye como el decorator que lo envuelve, así
+que **todo** el que lo pida (controladores y simulador) recibe la versión protegida:
+
+```csharp
+builder.Services.AddScoped<IRouteAssignmentValidator, RouteAssignmentValidator>();
+builder.Services.AddScoped<DeliveryRouteService>();
+builder.Services.AddScoped<IDeliveryRouteService>(provider => new AssignmentValidatingRouteService(
+    provider.GetRequiredService<DeliveryRouteService>(),
+    provider.GetRequiredService<IRouteAssignmentValidator>()));
+```
+
+**Reglas.**
+
+| Cuándo | Qué se comprueba |
+|--------|------------------|
+| Al crear una ruta (`POST /api/routes`, `POST /api/routes/express`) con vehículo | Que el vehículo exista · que no esté en mantenimiento ni fuera de servicio · que no tenga mantenimiento vencido (lo decide `IMaintenanceService`, el módulo predictivo) · que el **peso** total de la carga quepa en `CapacityKg` · que el **volumen** quepa en `CapacityM3` (si el vehículo lo declara) |
+| Al crear una ruta con conductor | Que el conductor exista |
+| Al iniciar un viaje (`PATCH /api/routes/{id}/status` a `InProgress` o `Delayed`) | Que el vehículo siga operativo y sin mantenimiento vencido · que no esté en **otro viaje activo** · que el conductor no esté en otro viaje activo |
+
+- Si se incumple alguna, la API responde **400** con todos los mensajes juntos (por ejemplo, *"La carga (2000 kg) supera la
+  capacidad del vehículo VAN-002 (1500 kg)."*) y no se crea ni cambia nada. Una carga exactamente igual a la capacidad es válida.
+- **Terminar o cancelar un viaje nunca se bloquea.** Al hacerlo solo se libera al vehículo que figuraba "en ruta": uno que
+  entretanto pasó a mantenimiento o fuera de servicio conserva ese estado. Tampoco se libera si el vehículo sigue en **otro**
+  viaje activo (en curso o retrasado): se corrigió al agregar Command ([8.13](#813-command--deshacer-y-rehacer-operaciones-de-rutas)),
+  porque deshacer cancela rutas y antes podía dejar «disponible» a un vehículo que seguía ocupado.
+- `CapacityM3` es un dato nuevo de `Vehicle` (camión 40 m³, furgoneta 10, auto 3,5, moto 0,3; las fábricas y los datos de
+  demostración lo traen, y el Prototype lo copia). El formulario de nueva ruta pide el volumen de cada artículo y avisa en
+  rojo, antes de enviar, si la carga supera la capacidad del vehículo elegido; el servidor lo valida de todos modos.
+- Duplicar una ruta (Prototype) **no** vuelve a validar al crear la copia (queda planificada, igual que el original); las
+  reglas de salida sí se aplican cuando la copia se inicia.
+
+### 8.13 Command — deshacer y rehacer operaciones de rutas
+
+Tres operaciones del módulo de rutas se pueden pedir como **órdenes** que se guardan en un historial y se pueden
+**deshacer y rehacer**: *crear una ruta*, *aplicar el orden optimizado de las paradas* y *aplicar el plan de reparto*. Cada
+orden es un objeto que sabe ejecutarse, deshacerse y rehacerse; un **invocador** las ejecuta y las anota en el historial de
+quien las pidió. **Los endpoints de siempre no cambian** (`POST /api/routes`, `POST /api/routes/{id}/optimization` y
+`POST /api/dispatch/apply` hacen lo mismo que antes y no dejan historial): las órdenes viven en un controlador aparte,
+`api/commands`, y el panel administrativo ahora usa ese para las tres operaciones («+ Nueva ruta», «Crear rutas del plan» y
+«Aplicar este orden»). «⚡ Ruta express» sigue usando `POST /api/routes/express` y no deja historial.
+
+| Pieza | Dónde está | Papel en el patrón |
+|-------|------------|--------------------|
+| `ICommand<TResult>` | `Application/Commands/` | **Command**: `ExecuteAsync()` y nada más. |
+| `IUndoableAction` | `Application/Commands/` | Lo que el historial necesita de cualquier orden, sin saber qué devuelve: descripción, si cambió algo (`HasEffect`), `UndoAsync()` y `RedoAsync()`. |
+| `IUndoableCommand<TResult>` | `Application/Commands/` | Una orden que se ejecuta **y** se puede deshacer (junta las dos anteriores). |
+| `CreateRouteCommand`, `ApplyRouteOptimizationCommand`, `ApplyDispatchPlanCommand` | `Application/Commands/` | **Concrete Commands**. Cada una usa los servicios que ya existían (los **Receivers**): no repite su lógica. |
+| `ICommandInvoker` / `CommandInvoker` | `Application/Commands/` | **Invoker**: ejecuta, deshace y rehace; no sabe qué hace cada orden. |
+| `IRouteCommandFactory` / `RouteCommandFactory` | `Application/Commands/` | Arma cada orden con sus dependencias, para que el controlador no las conozca. |
+| `CommandHistory` | `Application/Commands/` | El historial de **un** usuario: lo que puede deshacer y rehacer (20 operaciones como máximo), con exclusión para que dos peticiones suyas no se pisen. |
+| `ICommandHistoryStore` / `InMemoryCommandHistoryStore` | `Application/Commands/` / `Infrastructure/Commands/` | Un historial por usuario, en memoria. |
+| `RouteSnapshot` / `IRouteSnapshotService` | `Application/Commands/` | **Memento**: la "foto" del orden de las paradas y de la distancia y el tiempo estimados, tomada antes de optimizar. |
+| `IPlannedRouteCanceller` | `Application/Commands/` | Cancela las rutas que creó una orden: todas o ninguna, y solo si siguen planificadas. |
+| `CommandsController` | `Api/Controllers/` | HTTP: traduce los resultados y los errores. |
+| `commands.js` y los botones «↶ Deshacer» / «↷ Rehacer» | `frontend/` | Muestran el historial del usuario y piden deshacer o rehacer. |
+
+```mermaid
+classDiagram
+    direction LR
+    class CommandsController {
+        +POST routes
+        +POST routes/id/optimization
+        +POST dispatch/apply
+        +GET history
+        +POST undo
+        +POST redo
+    }
+    class IRouteCommandFactory {
+        <<interface>>
+        +CreateRoute(request)
+        +ApplyOptimization(routeId)
+        +ApplyDispatchPlan(request)
+    }
+    class ICommandInvoker {
+        <<interface>>
+        +ExecuteAsync(user, command)
+        +UndoAsync(user)
+        +RedoAsync(user)
+        +GetHistoryAsync(user)
+    }
+    class CommandInvoker
+    class ICommandHistoryStore {
+        <<interface>>
+        +For(user) CommandHistory
+    }
+    class InMemoryCommandHistoryStore
+    class CommandHistory {
+        +Undoable
+        +Redoable
+        +Record(action)
+    }
+    class ICommand~TResult~ {
+        <<interface>>
+        +ExecuteAsync() TResult
+    }
+    class IUndoableAction {
+        <<interface>>
+        +Description
+        +HasEffect
+        +UndoAsync()
+        +RedoAsync()
+    }
+    class IUndoableCommand~TResult~ {
+        <<interface>>
+    }
+    class CreateRouteCommand
+    class ApplyRouteOptimizationCommand
+    class ApplyDispatchPlanCommand
+    class IDeliveryRouteService {
+        <<interface>>
+        Receiver existente
+    }
+    class IRouteOptimizationService {
+        <<interface>>
+        Receiver existente
+    }
+    class IDispatchPlanningService {
+        <<interface>>
+        Receiver existente
+    }
+    class IRouteSnapshotService {
+        <<interface>>
+        Memento del orden de paradas
+    }
+    class IPlannedRouteCanceller {
+        <<interface>>
+        Cancela todas o ninguna
+    }
+
+    CommandsController --> ICommandInvoker
+    CommandsController --> IRouteCommandFactory
+    IRouteCommandFactory ..> IUndoableCommand : crea
+    ICommandInvoker <|.. CommandInvoker
+    CommandInvoker --> ICommandHistoryStore
+    ICommandHistoryStore <|.. InMemoryCommandHistoryStore
+    InMemoryCommandHistoryStore o-- CommandHistory : uno por usuario
+    CommandHistory o-- IUndoableAction
+    ICommand <|-- IUndoableCommand
+    IUndoableAction <|-- IUndoableCommand
+    IUndoableCommand <|.. CreateRouteCommand
+    IUndoableCommand <|.. ApplyRouteOptimizationCommand
+    IUndoableCommand <|.. ApplyDispatchPlanCommand
+    CreateRouteCommand --> IDeliveryRouteService
+    CreateRouteCommand --> IPlannedRouteCanceller
+    ApplyRouteOptimizationCommand --> IRouteOptimizationService
+    ApplyRouteOptimizationCommand --> IRouteSnapshotService
+    ApplyDispatchPlanCommand --> IDispatchPlanningService
+    ApplyDispatchPlanCommand --> IPlannedRouteCanceller
+```
+
+**Qué significa deshacer y rehacer en cada orden.**
+
+| Orden | Deshacer | Rehacer | Se niega a deshacer (409) si… |
+|-------|----------|---------|-------------------------------|
+| Crear una ruta | **Cancela** la ruta. No la borra: queda en la lista como «Cancelada» y su auditoría se conserva. | Crea una ruta **nueva** con los mismos datos y con las reglas de hoy (la cancelada sigue cancelada). | la ruta ya no está planificada (ya salió, se completó o se canceló). |
+| Aplicar el orden optimizado | Restaura el orden de las paradas y la distancia y el tiempo estimados que tenía antes (la "foto"). | Vuelve a optimizar con las reglas de hoy. | la ruta ya no está planificada o sus paradas cambiaron desde entonces. |
+| Aplicar el plan de reparto | Cancela **todas** las rutas que creó, o ninguna. | Vuelve a aplicar el plan con la flota de ese momento: puede dar otro reparto o fallar con el motivo (400). | alguna de esas rutas ya no está planificada o ya no existe. |
+
+**Reglas del historial.**
+
+- Es **por usuario** (por nombre de usuario, no por sesión: otro inicio de sesión del mismo usuario ve el mismo historial), vive en
+  memoria y guarda las **20** operaciones más recientes; se pierde al reiniciar la API.
+- Una orden que falla (regla de asignación incumplida, ruta inexistente…) **no queda** en el historial, y una que no cambió
+  nada (por ejemplo, optimizar una ruta que ya está en su mejor orden) tampoco.
+- Una operación nueva descarta lo que se había deshecho: ya no se puede rehacer (como en un editor de texto).
+- Si deshacer ya no es posible, la API responde **409** con el motivo y **quita esa operación del historial**, para que no
+  bloquee a las anteriores. Una falla pasajera (que no es un cambio de estado) la deja para reintentar.
+- Dos peticiones del mismo usuario a la vez (dos «deshacer» seguidos) se atienden una tras otra: no pueden deshacer lo mismo dos veces.
+- Todo queda en la bitácora con el usuario, en la categoría «Comando» (*Ejecutó / Deshizo / Rehízo / No se pudo deshacer*).
+
+**Endpoints** (todos solo para administradores: 401 sin sesión y 403 con un operador):
+
+| Método | Ruta | Qué hace | Respuestas |
+|--------|------|----------|------------|
+| POST | `/api/commands/routes` | Igual que `POST /api/routes` y deja la operación en el historial. | 201 con la ruta (`Location` hacia `GET /api/routes/{id}`) · 400 reglas de asignación o datos inválidos |
+| POST | `/api/commands/routes/{id}/optimization` | Igual que `POST /api/routes/{id}/optimization`. | 200 · 404 ruta inexistente · 400 ya no está planificada |
+| POST | `/api/commands/dispatch/apply` | Igual que `POST /api/dispatch/apply`. | 200 · 400 datos inválidos o nada que asignar |
+| GET | `/api/commands/history` | `{ "undoable": [...], "redoable": [...] }`, de lo más reciente a lo más antiguo, cada una con `description` y `executedAt`. | 200 |
+| POST | `/api/commands/undo` | Deshace la última operación del usuario. | 200 `{ "description", "history" }` · 400 nada que deshacer · 409 ya no se puede |
+| POST | `/api/commands/redo` | Rehace la última operación deshecha. | 200 · 400 nada que rehacer |
+
+En el panel, los botones **«↶ Deshacer»** y **«↷ Rehacer»** de la pestaña *Rutas y cargas* están apagados cuando no hay nada que
+deshacer o rehacer; al pasar el cursor muestran qué operación se va a deshacer o rehacer.
+
+**Cómo cumple SOLID y qué se evitó.**
+
+| Principio | En este patrón |
+|-----------|----------------|
+| **S** | Cada pieza tiene un solo motivo de cambio: la orden sabe su operación, el invocador ejecuta y anota, el historial guarda, la fábrica arma, el cancelador cancela, el controlador traduce HTTP. |
+| **O** | Una operación nueva que se pueda deshacer es **una clase nueva** (`IUndoableCommand<T>`), un método en la fábrica y un endpoint; el invocador y el historial no cambian (una prueba comprueba que no conocen ninguna orden concreta). |
+| **L** | El invocador funciona con cualquier `IUndoableCommand<T>`: sus pruebas usan órdenes de mentira que no tocan rutas ni vehículos. |
+| **I** | `ICommand<T>` (ejecutar) y `IUndoableAction` (lo que pide el historial) son interfaces pequeñas y separadas; el historial no necesita saber el tipo del resultado. |
+| **D** | Las órdenes dependen de interfaces de servicios, nunca de repositorios ni de clases concretas (una prueba de arquitectura lo vigila); el almacén de historiales es una interfaz y `Program.cs` es el único que elige la implementación. |
+
+Smells evitados a propósito: ningún `switch` ni `if (orden is X)` en el invocador; ninguna clase que lo haga todo; ninguna lógica
+repetida (las órdenes reutilizan los servicios existentes, así que las reglas de asignación del Decorator de la
+[sección 8.12](#812-decorator--reglas-de-asignación-sobre-el-servicio-de-rutas) y la estrategia de la
+[sección 8.11](#811-strategy--optimizar-paradas-y-repartir-cargas) se aplican igual al crear, al rehacer y al planificar); ningún
+estado compartido entre usuarios; y sin cambiar la interfaz del repositorio (por eso deshacer **cancela** en vez de borrar).
+
+**Qué no se tocó.** Singleton, Factory Method, Abstract Factory, Builder + Director, Prototype, Adapter, Bridge, Composite,
+los Decorators, el Facade, el Flyweight, el Proxy y Strategy siguen exactamente como estaban. Las órdenes llaman al
+`IDeliveryRouteService` protegido por el Decorator y reutilizan el Builder y las estrategias a través de los servicios
+existentes. Los dos únicos cambios en código existente, por si se quieren revisar: (1) `DeliveryRouteService` ya no libera a un vehículo
+al cancelar o completar una ruta si ese vehículo sigue ocupado en **otra** ruta activa (un defecto que ya existía y que deshacer
+habría vuelto visible), y (2) el texto del estado de la ruta, que antes era un método privado de `RouteOptimizationService`, pasó
+a `RouteStatusText` para que lo compartan sin cambiar ningún mensaje.
+
+### 8.14 Chain of Responsibility — de la alerta reportada a quien debe atenderla
+
+Cuando un operador reporta una alerta (`POST /api/alerts`), el reporte pasa por una **cadena de manejadores**: se valida, se
+registra, se clasifica por gravedad y se **escala** a quien corresponde (o se deja abierta). Cada manejador hace lo suyo y decide
+si el reporte sigue o lo da por atendido; quien reporta solo conoce al primero.
+
+```mermaid
+flowchart LR
+    R([POST /api/alerts]) --> V["1. ValidateAlertReportHandler<br/>descripción y retraso válidos"]
+    V -- no cumple --> X(["400 · se corta la cadena<br/>no se registra nada"])
+    V --> G["2. RegisterAlertHandler<br/>TripAlertService de siempre<br/>(guarda · retraso en la ruta · aviso a operaciones)"]
+    G --> C["3. ClassifySeverityHandler<br/>Minor · Serious · Critical"]
+    C --> E1{"4. Escalate<br/>¿Critical?"}
+    E1 -- sí --> A["aviso a la administración<br/>prioridad Critical"]
+    E1 -- no --> E2{"5. Escalate<br/>¿Serious?"}
+    E2 -- sí --> S["aviso al supervisor<br/>prioridad High"]
+    E2 -- no --> U["6. UnescalatedAlertHandler<br/>queda abierta, sin escalar"]
+```
+
+| # | Manejador | Qué hace | ¿Corta la cadena? |
+|---|-----------|----------|-------------------|
+| 1 | `ValidateAlertReportHandler` | Rechaza una descripción vacía o de más de 500 caracteres y un retraso de más de 1440 minutos (`AlertRejectedException` → 400). | Sí, si rechaza: no se registra nada. |
+| 2 | `RegisterAlertHandler` | Registra la alerta con el `TripAlertService` **de siempre**: valida tipo y ruta, la guarda, refleja el retraso en la ruta y avisa a operaciones (Bridge + Decorators). | No |
+| 3 | `ClassifySeverityHandler` | Le pone gravedad según `AlertSeverityPolicy`. | No |
+| 4 | `EscalateAlertHandler` (críticas) | Avisa a la administración con prioridad `Critical` y lo deja en la bitácora («Escalamiento»). | Sí: la alerta ya fue atendida. |
+| 5 | `EscalateAlertHandler` (graves) | Avisa al supervisor con prioridad `High`. | Sí |
+| 6 | `UnescalatedAlertHandler` | Deja constancia de que no requiere escalamiento: queda abierta. | Sí (es el último) |
+
+Los dos manejadores de escalamiento son **la misma clase** con distinto nivel, prioridad y destinatario: agregar un nivel no
+obliga a escribir otra clase.
+
+**Gravedad y qué pasa con cada una.**
+
+| Gravedad | Cuándo | Qué pasa |
+|----------|--------|----------|
+| `Critical` | Accidente (`Accident`), con cualquier retraso. | Aviso a `administrador@fleetcontrol.demo`, prioridad `Critical`. |
+| `Serious` | Avería (`Breakdown`), o **cualquier otro tipo** con un retraso de 60 minutos o más. | Aviso a `supervisor@fleetcontrol.demo`, prioridad `High`. |
+| `Minor` | Todo lo demás. | Queda registrada y **abierta**, sin escalar. |
+
+Solo se **clasifica y escala**: ninguna alerta se resuelve sola (`PATCH /api/alerts/{id}/resolve` sigue siendo manual) y
+escalar no cambia su estado. El aviso a operaciones que ya enviaba el servicio de alertas sigue enviándose en todos los casos;
+el escalamiento es un aviso adicional. Los avisos usan el mismo Bridge y los mismos Decorators (prioridad, reintentos y
+auditoría) que ya existían.
+
+**Configuración.** Las reglas no están escritas dentro de los manejadores: se leen de la sección `AlertHandling` y se
+**validan al arrancar**, igual que `Simulation` y `NavigationCache` ([sección 5.3](#53-configuración-de-la-simulación-y-del-caché-de-navegación)).
+
+| Clave | Por defecto | Qué controla |
+|-------|-------------|--------------|
+| `AlertHandling:MaxDescriptionLength` | `500` | Máximo de caracteres de la descripción (1 a 10 000). |
+| `AlertHandling:MaxDelayMinutes` | `1440` | Máximo de minutos de retraso en una alerta (1 a 100 000). |
+| `AlertHandling:SeriousDelayMinutes` | `60` | Desde cuántos minutos de retraso una alerta, sea del tipo que sea, es grave (1 a 100 000). |
+| `AlertHandling:SupervisorRecipient` | `supervisor@fleetcontrol.demo` | A quién se escalan las graves (no puede estar vacío). |
+| `AlertHandling:AdministratorRecipient` | `administrador@fleetcontrol.demo` | A quién se escalan las críticas (no puede estar vacío). |
+
+Por ejemplo, `AlertHandling__SeriousDelayMinutes=30` (el doble guion bajo equivale a `:`) hace graves los retrasos desde 30 minutos.
+
+**Cómo está armado.**
+
+```mermaid
+classDiagram
+    direction TB
+    class ITripAlertService {
+        <<interface>>
+        +CreateAlertAsync(request)
+        +GetAllAsync()
+        +GetByRouteAsync(routeId)
+        +ResolveAlertAsync(id)
+    }
+    class TripAlertService {
+        Servicio real, sin cambios
+    }
+    class AlertHandlingTripAlertService {
+        Decorator: el reporte pasa por la cadena
+    }
+    class IAlertHandler {
+        <<interface>>
+        +SetNext(next) IAlertHandler
+        +HandleAsync(context)
+    }
+    class AlertHandler {
+        <<abstract>>
+        +HandleAsync(context)
+        #CanHandle(context)
+        #ConsumesTheReport
+        #ProcessAsync(context)*
+    }
+    class ValidateAlertReportHandler
+    class RegisterAlertHandler
+    class ClassifySeverityHandler
+    class EscalateAlertHandler {
+        nivel, prioridad y destinatario como parámetros
+    }
+    class UnescalatedAlertHandler
+    class AlertReportContext {
+        Request
+        Alert
+        Severity
+        Steps
+    }
+    class AlertSeverityPolicy
+    class AlertHandlingOptions {
+        Límites, umbral y destinatarios
+    }
+
+    ITripAlertService <|.. TripAlertService
+    ITripAlertService <|.. AlertHandlingTripAlertService
+    AlertHandlingTripAlertService --> ITripAlertService : delega lo demás
+    AlertHandlingTripAlertService --> IAlertHandler : primer eslabón
+    IAlertHandler <|.. AlertHandler
+    AlertHandler --> IAlertHandler : siguiente
+    AlertHandler <|-- ValidateAlertReportHandler
+    AlertHandler <|-- RegisterAlertHandler
+    AlertHandler <|-- ClassifySeverityHandler
+    AlertHandler <|-- EscalateAlertHandler
+    AlertHandler <|-- UnescalatedAlertHandler
+    RegisterAlertHandler --> ITripAlertService : el real, no el decorador
+    ClassifySeverityHandler --> AlertSeverityPolicy
+    ValidateAlertReportHandler --> AlertHandlingOptions
+    AlertSeverityPolicy --> AlertHandlingOptions
+    AlertHandler ..> AlertReportContext
+```
+
+- `IAlertHandler` (`SetNext` y `HandleAsync`) es el contrato; `AlertHandler` es la base común: guarda al sucesor y decide en un
+  solo lugar qué pasa con el reporte. Cada manejador solo dice si le corresponde (`CanHandle`), qué hace (`ProcessAsync`) y si con
+  eso lo da por atendido (`ConsumesTheReport`).
+- `AlertReportContext` es lo que va de mano en mano: el reporte, la alerta ya registrada, su gravedad y una línea por cada
+  paso (útil para entender qué pasó). Pedir algo que ningún manejador anterior dejó es un error de armado de la cadena, no un valor vacío.
+- `AlertHandlerChain.Of(...)` enlaza una lista en orden, y `DefaultAlertHandlerChain.Create(...)` es el **único lugar** donde
+  está el orden de producción (validar → registrar → clasificar → críticas → graves → dejar abierta); las pruebas usan esa
+  misma cadena, no una copia.
+- `AlertHandlingTripAlertService` es un **Decorator** de `ITripAlertService`: `CreateAlertAsync` pasa por la cadena y lo demás
+  (`GetAllAsync`, `GetByRouteAsync`, `ResolveAlertAsync`) se delega tal cual. `TripAlertService`, su Bridge y sus Decorators no
+  cambiaron. Se registra igual que se hizo con las reglas de asignación:
+
+```csharp
+builder.Services.AddScoped<TripAlertService>();
+builder.Services.AddScoped<ITripAlertService>(provider =>
+{
+    var alerts = provider.GetRequiredService<TripAlertService>();
+    var chain = DefaultAlertHandlerChain.Create(
+        provider.GetRequiredService<AlertHandlingOptions>(),
+        alerts,
+        provider.GetRequiredService<INotificationChannel>(),
+        provider.GetRequiredService<IFleetAuditLogger>());
+    return new AlertHandlingTripAlertService(alerts, chain);
+});
+```
+
+- `RegisterAlertHandler` recibe el servicio **sin** la cadena: si recibiera el decorador, se llamaría a sí mismo sin fin.
+- No confundir con `NotificationChain` (`Notifications/Decorators/`): esa clase solo sirve para recorrer los decoradores de una
+  notificación y no tiene relación con esta cadena.
+
+**Para agregar un paso** (por ejemplo, avisar por SMS a un tercero) se escribe una clase que herede de `AlertHandler` y se pone
+en `DefaultAlertHandlerChain`; ningún otro manejador cambia (la prueba `ANewHandler_CanBeInsertedBetweenTheExistingOnes_WithoutChangingThem`
+lo demuestra).
+
+**Cómo cumple SOLID y qué se evitó.**
+
+| Principio | En este patrón |
+|-----------|----------------|
+| **S** | Cada manejador tiene una sola tarea (validar, registrar, clasificar, escalar, dejar abierta); la gravedad la decide `AlertSeverityPolicy` y los límites salen de `AlertHandlingOptions`. |
+| **O** | Un paso nuevo es una clase nueva y una línea en `DefaultAlertHandlerChain`; no se modifica ningún manejador ni `TripAlertService`. |
+| **L** | Cualquier `IAlertHandler` puede ir en cualquier lugar de la cadena; la base garantiza que un manejador que no puede atender un reporte nunca lo corta. |
+| **I** | `IAlertHandler` tiene dos métodos; los manejadores reciben solo lo que usan (opciones, política, canal, bitácora). |
+| **D** | Los manejadores dependen de interfaces (`ITripAlertService`, `INotificationChannel`, `IFleetAuditLogger`), no de `TripAlertService` (una prueba de arquitectura lo vigila); la cadena se arma en un solo lugar. |
+
+Smells evitados a propósito: el `if`/`switch` gigante por gravedad dentro de un método (cada nivel es un manejador), los números
+y destinatarios escritos dentro de las clases (salen de la configuración) y una cadena "mágica" armada en varios sitios.
+
+**Qué cambia para quien usaba `POST /api/alerts`.** Una alerta válida responde igual (200 con la alerta). Lo nuevo: ahora se
+rechaza con **400** y un mensaje claro una descripción vacía o solo con espacios (antes se registraba), una de más de 500
+caracteres y un retraso de más de 1440 minutos (antes se aceptaban). Lo demás no cambia: sin el campo `description` sigue
+respondiendo 400 con el aviso estándar de ASP.NET, una ruta inexistente responde 404, un tipo inválido 400 y un retraso negativo
+se guarda como 0. Además, las alertas graves y críticas generan un aviso adicional (visible en la consola del backend y en
+`GET /api/audit/logs`).
+
 ---
 
 ## 9. Documentación de la API REST
@@ -807,22 +1319,53 @@ correr el backend. Resumen de endpoints:
 | GET | `/api/routes/{id}` | Detalle de una ruta | — |
 | GET | `/api/routes/driver/{driverId}` | Rutas asignadas a un conductor | — |
 | GET | `/api/routes/{id}/cargo-manifest` | Manifiesto jerárquico de la carga de una ruta (Composite) | — |
-| POST | `/api/routes` | Crea una ruta (Builder) | Admin |
-| POST | `/api/routes/express` | Crea una ruta express (Builder + Director) | Admin |
+| POST | `/api/routes` | Crea una ruta (Builder). Responde 400 si la carga excede la capacidad del vehículo, si este no está operativo o tiene mantenimiento vencido ([8.12](#812-decorator--reglas-de-asignación-sobre-el-servicio-de-rutas)) | Admin |
+| POST | `/api/routes/express` | Crea una ruta express (Builder + Director). Mismas reglas de asignación que `POST /api/routes` | Admin |
 | POST | `/api/routes/{id}/duplicate` | Duplica una ruta (Prototype) | Admin |
-| PATCH | `/api/routes/{id}/status` | Cambia el estado de una ruta | — |
+| PATCH | `/api/routes/{id}/status` | Cambia el estado de una ruta. Al iniciarla (`InProgress`/`Delayed`) responde 400 si el vehículo o el conductor ya están en otro viaje activo o el vehículo no está operativo | — |
+| GET | `/api/routes/{id}/optimization` | Propone un mejor orden de las paradas **sin modificar la ruta**: lista actual y propuesta, kilómetros y minutos de cada una, ahorro (Strategy) | — |
+| POST | `/api/routes/{id}/optimization` | Aplica el orden propuesto (solo rutas planificadas; 400 si no lo está; si ya es el mejor, no cambia nada) | Admin |
+| POST | `/api/dispatch/plan` | Calcula, **sin guardar nada**, el reparto de una lista de entregas entre los vehículos disponibles: viajes con sus paradas en orden, carga, kilómetros y minutos; entregas sin asignar con su motivo; vehículos excluidos con su motivo; comparación con el reparto simple (Strategy) | Admin |
+| POST | `/api/dispatch/apply` | Recalcula el plan y crea una ruta **planificada** por viaje (todo o nada) | Admin |
+| POST | `/api/commands/routes` | Igual que `POST /api/routes`, pero la operación queda en el historial del usuario y se puede deshacer ([8.13](#813-command--deshacer-y-rehacer-operaciones-de-rutas)) | Admin |
+| POST | `/api/commands/routes/{id}/optimization` | Igual que `POST /api/routes/{id}/optimization`, con historial | Admin |
+| POST | `/api/commands/dispatch/apply` | Igual que `POST /api/dispatch/apply`, con historial | Admin |
+| GET | `/api/commands/history` | Lo que el usuario puede deshacer y rehacer, de lo más reciente a lo más antiguo | Admin |
+| POST | `/api/commands/undo` | Deshace la última operación del usuario (cancela la ruta creada o restaura el orden de las paradas). 400 si no hay nada que deshacer; 409 si ya no se puede | Admin |
+| POST | `/api/commands/redo` | Rehace la última operación deshecha (crea rutas nuevas con las reglas de hoy). 400 si no hay nada que rehacer | Admin |
 | GET | `/api/maintenance` | Historial de mantenimiento | — |
 | GET | `/api/maintenance/vehicle/{vehicleId}` | Historial de un vehículo | — |
 | GET | `/api/maintenance/due` | Vehículos con mantenimiento vencido (predictivo) | — |
 | POST | `/api/maintenance` | Registra un mantenimiento | Admin |
 | GET | `/api/alerts` | Lista de alertas de viaje | — |
 | GET | `/api/alerts/route/{routeId}` | Alertas de una ruta | — |
-| POST | `/api/alerts` | Reporta una complicación durante el viaje | — (operador) |
+| POST | `/api/alerts` | Reporta una complicación durante el viaje. Pasa por una cadena de manejadores ([8.14](#814-chain-of-responsibility--de-la-alerta-reportada-a-quien-debe-atenderla)): responde 400 si la descripción está vacía o pasa de 500 caracteres, o si el retraso pasa de 1440 minutos; las alertas graves y críticas se escalan | — (operador) |
 | PATCH | `/api/alerts/{id}/resolve` | Marca una alerta como resuelta | Admin |
 | GET | `/api/navigation/route/{routeId}` | Enlace de navegación externa (Google Maps). Adapter detrás de un Proxy de caché | — |
 | GET | `/api/audit/logs` | Registro de auditoría (Singleton) | Admin |
 | GET | `/api/reports/fleet` | Reporte de la flota (vehículos y rutas). Con `?sections=Statistics,MaintenanceAlerts,CargoSummary` agrega esas secciones (Decorator) | — |
 | GET | `/api/dashboard/summary` | Resumen general de la flota para el dashboard (Facade) | — |
+
+**Ejemplo: planificar un reparto** (Git Bash; el token sale de `POST /api/auth/login` con `admin` / `Admin123!`):
+
+```bash
+curl -s -X POST http://localhost:5080/api/dispatch/plan \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{
+    "originLat": 7.1193, "originLng": -73.1227,
+    "deliveries": [
+      { "description": "Piedecuesta", "weightKg": 50, "volumeM3": 0.5, "priority": "Standard", "latitude": 6.9876, "longitude": -73.0505 },
+      { "description": "Girón", "weightKg": 20, "volumeM3": 0.3, "priority": "Standard", "latitude": 7.0806, "longitude": -73.1716 },
+      { "description": "Floridablanca", "weightKg": 10, "volumeM3": 0.2, "priority": "Standard", "latitude": 7.0622, "longitude": -73.0864 },
+      { "description": "Lebrija", "weightKg": 5, "volumeM3": 0.1, "priority": "Standard", "latitude": 7.1139, "longitude": -73.2194 }
+    ]
+  }'
+```
+
+`priority` puede ser `Standard`, `High`, `Urgent` o `Fragile` (si se omite, `Standard`); `vehicleIds` (opcional) limita el plan
+a esos vehículos y `scheduledDate` (opcional) se copia a las rutas que cree `apply`. En la respuesta, `trips[].stops` trae
+las paradas **ya ordenadas**, `totals` y `baseline` los totales del plan y del reparto simple, y `comparison` el ahorro. Los
+datos inválidos (sin entregas, peso ≤ 0, coordenadas fuera de rango, prioridad desconocida, vehículo inexistente) responden
+400 con `{ "message": "..." }`.
 
 La autorización por rol se implementa con el atributo `[RequireRole(UserRole.Admin)]`
 (`Api/Filters/RequireRoleAttribute.cs`), evaluado sobre el `ClaimsPrincipal` que
@@ -855,12 +1398,14 @@ para mantenerlo simple, y quedan documentadas aquí para quien continúe el proy
   Las contraseñas ya se almacenan correctamente hasheadas (PBKDF2 + sal), lo cual
   sí es una práctica válida para producción.
 - **Optimización de rutas:** `DeliveryRouteService` estima distancia y tiempo con
-  la fórmula de **Haversine** entre origen, paradas y destino (hoy en `Application/Geo/GeoMath`,
-  compartida con la simulación; da los mismos resultados que antes), más una velocidad
-  promedio asumida. Es una heurística razonable para un prototipo, no un
-  solver de ruteo (VRP); un siguiente paso natural sería integrar un motor de
-  ruteo real (OSRM, Google Routes API, etc.) detrás de la misma interfaz
-  `INavigationService`.
+  la fórmula de **Haversine** entre origen, paradas y destino (`Application/Geo/GeoMath`,
+  compartida con la simulación y con el plan de reparto) y con la **velocidad del tipo de
+  vehículo** (`VehicleSpeed`, perfil Flyweight; sin vehículo, 55 km/h por defecto). El orden de
+  las paradas y el reparto de entregas los deciden estrategias ([sección 8.11](#811-strategy--optimizar-paradas-y-repartir-cargas)):
+  vecino más cercano + 2-opt, y "best fit" con prioridades. Son heurísticas sobre distancias
+  **en línea recta**, no un solver de ruteo (VRP) ni un motor de calles; un siguiente paso
+  natural sería implementar `IRouteOptimizer` con un motor de ruteo real (OSRM, Google Routes
+  API, etc.) que dé distancias por carretera.
 - **Simulación de tiempo real:** `VehicleSimulationBackgroundService` es ahora un
   simple temporizador (`PeriodicTimer`, cada `Simulation:TickSeconds`, por defecto 1 s)
   que en cada paso le pide a `IVehicleMovementSimulator` avanzar el tiempo transcurrido.
@@ -893,14 +1438,14 @@ para mantenerlo simple, y quedan documentadas aquí para quien continúe el proy
 
 ## 11. Limitaciones conocidas del prototipo
 
-- No se compiló en este entorno de generación por no contar con acceso a NuGet;
-  el código fue escrito y revisado cuidadosamente (sintaxis, `using`s, tipos de
-  los enums, firmas de interfaces vs. implementaciones), pero se recomienda
-  ejecutar `dotnet build` como primer paso al recibirlo.
-- No incluye pruebas automatizadas (unitarias/integración). La separación por
-  capas e interfaces del proyecto está pensada para que agregar pruebas con
-  `xUnit` + `Moq`/`NSubstitute` sobre `Application.Services` sea directo, sin
-  necesidad de un servidor HTTP real ni de una base de datos.
+- **Cómo se verificó y qué falta verificar.** El entorno donde se generó esta versión no tenía acceso a NuGet, así que
+  **no se ejecutaron `dotnet restore` / `dotnet test` reales**. `Domain`, `Application`, `Infrastructure` (sin `FleetDbContext.cs`,
+  que usa EF Core) y `Api` se compilaron con el SDK de .NET 8 y el framework compartido de ASP.NET Core, con sustitutos mínimos
+  de `NetTopologySuite` (`Point`) y de Swashbuckle, y las pruebas se ejecutaron con un ejecutor mínimo compatible con xUnit
+  (solo para esa verificación, no forma parte del proyecto). La API se levantó y se probó por HTTP, y el frontend se probó en
+  un navegador sin interfaz (Chromium) con los mosaicos del mapa simulados. Al recibirlo, ejecute `dotnet build` y
+  `dotnet test` (esperado: **800** pruebas superadas, [sección 12](#12-pruebas-automatizadas-y-cómo-demostrar-el-factory-method))
+  y avise de cualquier diferencia. El frontend no tiene pruebas automatizadas dentro del proyecto.
 - El cálculo de "próximo mantenimiento vencido" compara la fecha/kilometraje
   registrados manualmente en cada `MaintenanceRecord`; no hay integración con
   telemetría real del vehículo para el kilometraje actual (se actualiza junto
@@ -909,6 +1454,36 @@ para mantenerlo simple, y quedan documentadas aquí para quien continúe el proy
   destino (lo mismo que dibuja el mapa): no sigue las calles ni simula tráfico. El
   avance de los viajes vive en memoria, como el resto de los datos, y se pierde al
   reiniciar la API.
+- **Optimización y asignación** ([8.11](#811-strategy--optimizar-paradas-y-repartir-cargas)): las distancias son en línea
+  recta (no hay red de calles ni tráfico) y los algoritmos son heurísticas que no garantizan el óptimo. El tiempo y los
+  kilómetros de un viaje se cuentan desde el punto de salida: el trayecto del vehículo hasta ese punto solo decide **qué
+  vehículo sale primero**, no se suma. El plan no tiene en cuenta ventanas horarias, regreso al depósito, varios depósitos ni
+  horas de conducción, y no asigna conductor (las rutas que crea quedan sin conductor). Con capacidad escasa prioriza lo
+  urgente y lo pesado, y puede dejar más entregas pequeñas sin asignar que el orden simple (se informa cuáles y por qué).
+  Un vehículo con rutas *planificadas* que aún no han salido sigue siendo candidato de un plan nuevo: la doble asignación
+  se impide al **iniciar** el viaje, no al planificar. Un plan admite hasta 200 entregas.
+- **Reglas de asignación** ([8.12](#812-decorator--reglas-de-asignación-sobre-el-servicio-de-rutas)): la capacidad se
+  comprueba al crear la ruta y las reglas de disponibilidad también al iniciarla; duplicar una ruta no repite la
+  comprobación al crear la copia. El estado "vencido" del mantenimiento sale del módulo predictivo actual (fecha o kilometraje
+  registrados a mano).
+- **Deshacer y rehacer** ([8.13](#813-command--deshacer-y-rehacer-operaciones-de-rutas)): solo cubre tres operaciones (crear una
+  ruta desde «+ Nueva ruta», aplicar el orden optimizado y aplicar el plan de reparto); «⚡ Ruta express», duplicar, cambiar el
+  estado y los endpoints anteriores no dejan historial. Deshacer **cancela** las rutas (no las borra) y solo se permite mientras
+  siguen planificadas; la comprobación y la cancelación no son una operación atómica entre usuarios (si otra persona inicia una
+  de esas rutas justo en medio, puede quedar cancelada una ruta que ya salió). Rehacer no recupera lo deshecho: vuelve a ejecutar
+  la operación con los datos y las reglas de hoy y **crea rutas nuevas**; si una regla ya no se cumple falla con su motivo y la
+  operación sigue disponible para rehacer. El historial es **por nombre de usuario**, vive en memoria, guarda las 20 operaciones
+  más recientes y se pierde al reiniciar la API (no se comparte entre varias instancias).
+- **Cadena de alertas** ([8.14](#814-chain-of-responsibility--de-la-alerta-reportada-a-quien-debe-atenderla)): escalar solo
+  **avisa y deja constancia**; no resuelve ni reasigna nada (resolver sigue siendo manual) y no hay re-escalamiento por tiempo (una
+  alerta grave sin atender no sube sola a la administración). Los destinatarios son dos direcciones de la configuración, no se
+  eligen por ruta, turno ni conductor, y la gravedad usa reglas simples (tipo y minutos de retraso). Si el aviso de escalamiento
+  falla tras agotar los reintentos, la alerta ya quedó guardada pero la API responde con error (no hay bandeja de salida para
+  reintentarlo después). `POST /api/alerts` ahora rechaza descripciones vacías o de más de 500 caracteres y retrasos de más de
+  1440 minutos, que antes aceptaba.
+- Los endpoints con "—" en la columna "Rol requerido" de la [sección 9](#9-documentación-de-la-api-rest) (todos los `GET`,
+  incluido `GET /api/routes/{id}/optimization`, y algunos de escritura como `PATCH /api/routes/{id}/status`) responden sin exigir
+  sesión; antes de producción conviene exigirla en todos.
 - El caché del proxy de navegación ([sección 8.10](#810-proxy--caché-del-proveedor-de-navegación))
   es de memoria y por proceso, y hoy el proveedor real solo arma un texto, así que su
   beneficio práctico es pequeño. Lo mismo vale para el Flyweight con cuatro tipos de
@@ -987,6 +1562,53 @@ están escritos a mano.
 
 Para ejecutar sólo una parte: `dotnet test --filter "FullyQualifiedName~Simulation"`, `...~Flyweight`, `...~Proxy` o
 `...~Architecture`.
+
+### Pruebas de las reglas de asignación y de la optimización (secciones 8.11 y 8.12)
+
+Con estas pruebas el total esperado en el mismo proyecto es de **603**: las 393 anteriores (sin ningún cambio en sus archivos), más
+210 nuevas (cada fila de un `[Theory]` cuenta como una prueba). Siguen sin usar librerías de mocking.
+
+| Carpeta | Qué demuestra |
+|---------|----------------|
+| `Assignment/` | `RouteAssignmentValidator`: peso y volumen (también justo en el límite y con sumas decimales), vehículo en mantenimiento o fuera de servicio, mantenimiento vencido, conductor inexistente, vehículo o conductor ya en otro viaje activo, y que se informan **todas** las infracciones juntas. `AssignmentValidatingRouteService`: valida antes de delegar, nunca llega al servicio real si falla una regla, no bloquea terminar ni cancelar y delega sin validar las consultas y el duplicado. `DeliveryRouteServiceAssignmentTests`: al terminar o cancelar solo se libera a un vehículo que estaba "en ruta" y el tiempo estimado usa la velocidad del tipo. |
+| `Geo/` | `TripEstimate` (minutos = km ÷ velocidad; rechaza velocidades no positivas) y `VehicleSpeed` (velocidad del perfil del tipo; por defecto sin vehículo). |
+| `Optimization/RouteOptimizerTests.cs` | `TourLength`, vecino más cercano y 2-opt: corrige un cruce, nunca devuelve algo más largo que su punto de partida (con y sin destino fijo), deja fijos el origen y el destino, es determinista y queda a menos de 1,35 veces del óptimo en instancias pequeñas (comparado con probar todas las permutaciones). |
+| `Optimization/CargoAssignmentStrategyTests.cs`, `StopSequencerTests.cs` | Mejor ajuste con prioridades (urgentes primero, consolidación, apertura del vehículo que antes llega, motivos de lo no asignado, peso y volumen) frente al orden simple, y la secuencia de cada viaje (urgentes primero). Dos pruebas son **comprobaciones empíricas sobre un lote sembrado**, no garantías generales. |
+| `Optimization/RouteOptimizationServiceTests.cs` | Proponer (sin cambiar nada) y aplicar el orden de una ruta real: kilómetros y minutos, renumeración de las paradas, origen y destino intactos, auditoría, solo rutas planificadas, ruta inexistente, y que una ruta ya en su mejor orden no se empeora. |
+| `Optimization/DispatchPlanningServiceTests.cs` | El plan con repositorios reales: vehículos excluidos con motivo, entregas sin asignar con motivo, comparación (válida o no, con nota si recorre más), validación de datos con mensajes claros, y `apply`: una ruta planificada por viaje, todo o nada, sin iniciar viajes ni tocar vehículos, con auditoría y fecha programada. |
+
+Para ejecutar sólo una parte: `dotnet test --filter "FullyQualifiedName~Assignment"` o `...~Optimization`.
+
+**Cómo se comprobó que estas pruebas detectan fallos.** Durante el desarrollo se rompieron a propósito 36 reglas clave del
+código (capacidad en kg y en m³, vehículo en mantenimiento o fuera de servicio, mantenimiento vencido, doble asignación de
+vehículo y de conductor, liberación del vehículo, el 2-opt, el vecino más cercano, el mejor ajuste, la prioridad, el todo o
+nada de `apply`, la protección de "nunca empeorar", la velocidad por tipo, etc.) y se volvieron a ejecutar las pruebas: las 36
+rupturas fueron detectadas. Una (la protección de "nunca empeorar") no lo fue al principio y por eso se agregó la prueba que
+faltaba. Es una verificación del desarrollo (ejecutada en el arnés descrito en la [sección 11](#11-limitaciones-conocidas-del-prototipo)),
+no algo que se ejecute con `dotnet test`.
+
+### Pruebas de Command y de Chain of Responsibility (secciones 8.13 y 8.14)
+
+Con estas pruebas el total esperado en el mismo proyecto es de **800**: las 603 anteriores (ninguno de sus archivos cambió) más
+197 nuevas (cada fila de un `[Theory]` cuenta como una prueba). Siguen sin usar librerías de mocking: se usan repositorios en
+memoria reales y dobles escritos a mano.
+
+| Carpeta o archivo | Qué demuestra |
+|-------------------|----------------|
+| `Command/` (82) | `CommandHistory`: orden de deshacer y rehacer, capacidad de 20 (descarta la más antigua), una operación nueva descarta lo rehacible y exclusión para que dos peticiones no se pisen. `CommandInvoker`: ejecuta y anota (con la hora del reloj y el usuario en la bitácora), no guarda lo que falla ni lo que no cambió nada, un 409 quita la operación del historial y una falla pasajera la conserva, dos «deshacer» a la vez no deshacen lo mismo dos veces y cada usuario tiene su historial. `InMemoryCommandHistoryStore`: un historial por usuario (sin distinguir mayúsculas ni espacios). Las tres órdenes con repositorios reales: crear (deshacer cancela, rehacer crea una ruta nueva), orden optimizado (`RouteSnapshotService` restaura orden, distancia y tiempo; se niega si la ruta salió o sus paradas cambiaron) y plan de reparto (`PlannedRouteCanceller` cancela todas o ninguna). |
+| `AlertHandling/` (102) | `AlertHandlerChain`: orden, quien no puede atender nunca corta la cadena, quien consume la corta, una falla no se oculta y un manejador nuevo se inserta sin tocar a los demás. `AlertReportContext`. Cada manejador: validar (con límites configurables), registrar, clasificar, escalar (nivel, prioridad, destinatario y bitácora; nunca resuelve la alerta) y dejar abierta. `AlertSeverityPolicy` y `AlertHandlingOptions` (valores por defecto y validación al arrancar). La cadena de producción completa con el servicio real y repositorios reales: leve, avería, accidente, retraso largo, reportes rechazados que no guardan nada y que escalar nunca resuelve. `AlertHandlingTripAlertService`: solo `CreateAlertAsync` pasa por la cadena. |
+| `Assignment/DeliveryRouteServiceVehicleReleaseTests.cs` (6) | Terminar o cancelar una ruta no libera a un vehículo que sigue en otra ruta activa (en curso o retrasada) y sí libera al que solo estaba en esa. |
+| `Architecture/CommandAndChainDesignTests.cs` (7) | El invocador, el historial y el almacén no conocen ninguna orden concreta; las órdenes y los manejadores solo reciben interfaces y datos (nunca repositorios ni clases concretas); las interfaces nuevas siguen siendo pequeñas; y el código que ya existía no conoce los patrones nuevos. Revisan las **firmas** de los tipos, no el cuerpo de los métodos. |
+
+Para ejecutar sólo una parte: `dotnet test --filter "FullyQualifiedName~Command"` (89: las 82 de `Command/` y las 7 de arquitectura, cuyo nombre también lleva «Command») o `...~AlertHandling` (102).
+
+**Cómo se comprobó que estas pruebas detectan fallos.** Durante el desarrollo se rompieron a propósito 63 reglas clave del
+código (el orden y la capacidad del historial, el invocador, el historial por usuario, la foto y la restauración de paradas, el
+todo o nada del cancelador, las tres órdenes, la liberación del vehículo, la validación, la política de gravedad, el
+escalamiento —nivel, prioridad, destinatario, bitácora y que una falla no se oculte—, el orden de la cadena de producción, el
+decorador, que escalar no resuelva la alerta y 7 violaciones de diseño para las pruebas de arquitectura) y se volvieron a
+ejecutar las pruebas: las 63 rupturas fueron detectadas. Es una verificación del desarrollo (ejecutada en el arnés descrito en
+la [sección 11](#11-limitaciones-conocidas-del-prototipo)), no algo que se ejecute con `dotnet test`.
 
 ### Demostración manual / en vivo (sin correr pruebas)
 

@@ -68,6 +68,20 @@ const FleetAPI = {
   duplicateRoute: (id, newScheduledDate) => apiFetch(`/routes/${id}/duplicate`, { method: 'POST', body: JSON.stringify({ newScheduledDate }) }),
   updateRouteStatus: (id, status) => apiFetch(`/routes/${id}/status`, { method: 'PATCH', body: JSON.stringify({ status }) }),
 
+  // --- Optimización de rutas y asignación de cargas (Strategy): proponer no guarda nada; aplicar sí ---
+  getRouteOptimization: (id) => apiFetch(`/routes/${id}/optimization`),
+  applyRouteOptimization: (id) => apiFetch(`/routes/${id}/optimization`, { method: 'POST' }),
+  planDispatch: (data) => apiFetch('/dispatch/plan', { method: 'POST', body: JSON.stringify(data) }),
+  applyDispatch: (data) => apiFetch('/dispatch/apply', { method: 'POST', body: JSON.stringify(data) }),
+
+  // --- Comandos con deshacer/rehacer (Command): las mismas operaciones de arriba, pero quedan en el historial del usuario ---
+  commandCreateRoute: (data) => apiFetch('/commands/routes', { method: 'POST', body: JSON.stringify(data) }),
+  commandApplyRouteOptimization: (id) => apiFetch(`/commands/routes/${id}/optimization`, { method: 'POST' }),
+  commandApplyDispatch: (data) => apiFetch('/commands/dispatch/apply', { method: 'POST', body: JSON.stringify(data) }),
+  getCommandHistory: () => apiFetch('/commands/history'),
+  undoCommand: () => apiFetch('/commands/undo', { method: 'POST' }),
+  redoCommand: () => apiFetch('/commands/redo', { method: 'POST' }),
+
   // --- Mantenimiento predictivo ---
   getMaintenance: () => apiFetch('/maintenance'),
   getMaintenanceByVehicle: (vehicleId) => apiFetch(`/maintenance/vehicle/${vehicleId}`),

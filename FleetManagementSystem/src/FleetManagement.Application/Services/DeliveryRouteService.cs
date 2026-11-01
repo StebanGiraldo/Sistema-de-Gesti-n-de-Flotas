@@ -1,5 +1,6 @@
 using FleetManagement.Application.Builders;
 using FleetManagement.Application.DTOs;
+using FleetManagement.Application.Flyweights;
 using FleetManagement.Application.Geo;
 using FleetManagement.Application.Interfaces;
 using FleetManagement.Application.Interfaces.Repositories;
@@ -23,6 +24,7 @@ public class DeliveryRouteService : IDeliveryRouteService
     private readonly IDeliveryRouteBuilder _routeBuilder; // BUILDER (Transient: una instancia nueva por cada request)
     private readonly DeliveryRouteDirector _routeDirector;
     private readonly IFleetAuditLogger _auditLogger;
+    private readonly IVehicleTypeProfileFactory? _profiles; // FLYWEIGHT: velocidad del tipo de vehículo (opcional)
 
     public DeliveryRouteService(
         IDeliveryRouteRepository routeRepository,
@@ -30,7 +32,8 @@ public class DeliveryRouteService : IDeliveryRouteService
         IDriverRepository driverRepository,
         IDeliveryRouteBuilder routeBuilder,
         DeliveryRouteDirector routeDirector,
-        IFleetAuditLogger auditLogger)
+        IFleetAuditLogger auditLogger,
+        IVehicleTypeProfileFactory? profiles = null)
     {
         _routeRepository = routeRepository;
         _vehicleRepository = vehicleRepository;
@@ -38,6 +41,7 @@ public class DeliveryRouteService : IDeliveryRouteService
         _routeBuilder = routeBuilder;
         _routeDirector = routeDirector;
         _auditLogger = auditLogger;
+        _profiles = profiles;
     }
 
     public async Task<IReadOnlyList<DeliveryRouteDto>> GetAllRoutesAsync()
@@ -86,7 +90,8 @@ public class DeliveryRouteService : IDeliveryRouteService
         var (distanceKm, minutes) = EstimateTrip(
             request.OriginLat, request.OriginLng,
             request.DestinationLat, request.DestinationLng,
-            request.Waypoints);
+            request.Waypoints,
+            await AverageSpeedKmhAsync(request.AssignedVehicleId));
         builder = builder.WithEstimatedTrip(distanceKm, minutes);
 
         var route = builder.Build();
@@ -103,7 +108,8 @@ public class DeliveryRouteService : IDeliveryRouteService
     /// <summary>Creación rápida de una ruta "express" usando el Director del Builder.</summary>
     public async Task<DeliveryRouteDto> CreateExpressRouteAsync(CreateExpressRouteRequest request)
     {
-        var (distanceKm, minutes) = EstimateTrip(request.OriginLat, request.OriginLng, request.DestinationLat, request.DestinationLng, null);
+        var (distanceKm, minutes) = EstimateTrip(request.OriginLat, request.OriginLng, request.DestinationLat, request.DestinationLng, null,
+            await AverageSpeedKmhAsync(request.AssignedVehicleId));
 
         var route = _routeDirector.BuildExpressRoute(
             _routeBuilder,
@@ -159,7 +165,7 @@ public class DeliveryRouteService : IDeliveryRouteService
                 vehicle.Status = newStatus switch
                 {
                     DeliveryRouteStatus.InProgress or DeliveryRouteStatus.Delayed => VehicleStatus.EnRoute,
-                    DeliveryRouteStatus.Completed or DeliveryRouteStatus.Cancelled => VehicleStatus.Available,
+                    DeliveryRouteStatus.Completed or DeliveryRouteStatus.Cancelled => ReleasedStatus(vehicle.Status, await UsedByAnotherActiveRouteAsync(vehicleId, route.Id)),
                     _ => vehicle.Status
                 };
                 await _vehicleRepository.UpdateAsync(vehicle);
@@ -169,6 +175,20 @@ public class DeliveryRouteService : IDeliveryRouteService
         _auditLogger.LogEvent("Ruta", $"Ruta '{route.Name}' cambió su estado a {newStatus}.");
     }
 
+    /// <summary>
+    /// Al terminar o cancelar un viaje solo se libera al vehículo que iba "En ruta" y que no sigue ocupado en otro viaje
+    /// activo (cancelar una ruta planificada no debe liberar al que va en camino con otra). Uno que está en mantenimiento o
+    /// fuera de servicio conserva ese estado: terminar una ruta no lo repara.
+    /// </summary>
+    private static VehicleStatus ReleasedStatus(VehicleStatus current, bool usedByAnotherTrip)
+        => current == VehicleStatus.EnRoute && !usedByAnotherTrip ? VehicleStatus.Available : current;
+
+    private async Task<bool> UsedByAnotherActiveRouteAsync(Guid vehicleId, Guid routeId)
+        => (await _routeRepository.GetAllAsync()).Any(other =>
+            other.Id != routeId
+            && other.AssignedVehicleId == vehicleId
+            && other.Status is DeliveryRouteStatus.InProgress or DeliveryRouteStatus.Delayed);
+
     // ------------------------------------------------------------------
     // Estimación de distancia/tiempo (heurística de optimización de rutas)
     // ------------------------------------------------------------------
@@ -176,7 +196,8 @@ public class DeliveryRouteService : IDeliveryRouteService
     private static (double distanceKm, double minutes) EstimateTrip(
         double originLat, double originLng,
         double destinationLat, double destinationLng,
-        List<WaypointDto>? waypoints)
+        List<WaypointDto>? waypoints,
+        double speedKmh)
     {
         var points = new List<(double lat, double lng)> { (originLat, originLng) };
         if (waypoints is not null)
@@ -187,10 +208,20 @@ public class DeliveryRouteService : IDeliveryRouteService
         for (var i = 0; i < points.Count - 1; i++)
             totalKm += HaversineDistanceKm(points[i], points[i + 1]);
 
-        const double avgSpeedKmh = 55.0; // velocidad promedio asumida para vías mixtas urbanas/interurbanas
-        var minutes = totalKm / avgSpeedKmh * 60;
+        var minutes = TripEstimate.Minutes(totalKm, speedKmh);
 
         return (Math.Round(totalKm, 2), Math.Round(minutes, 1));
+    }
+
+    /// <summary>
+    /// Velocidad con la que se estima el tiempo: la del tipo del vehículo asignado (la misma que usa la simulación, así
+    /// la estimación y el avance coinciden). Sin vehículo, o sin perfiles, se usa la velocidad promedio por defecto.
+    /// </summary>
+    private async Task<double> AverageSpeedKmhAsync(Guid? vehicleId)
+    {
+        if (vehicleId is null || _profiles is null) return TripEstimate.DefaultSpeedKmh;
+
+        return VehicleSpeed.KmPerHour(await _vehicleRepository.GetByIdAsync(vehicleId.Value), _profiles);
     }
 
     /// <summary>

@@ -16,6 +16,7 @@ public class TruckFactory : IVehicleFactory
             Year = year,
             Type = VehicleType.Truck,
             CapacityKg = 8000,
+            CapacityM3 = 40,
             Status = VehicleStatus.Available
         };
         vehicle.UpdateLocation(latitude, longitude);
@@ -36,6 +37,7 @@ public class VanFactory : IVehicleFactory
             Year = year,
             Type = VehicleType.Van,
             CapacityKg = 1500,
+            CapacityM3 = 10,
             Status = VehicleStatus.Available
         };
         vehicle.UpdateLocation(latitude, longitude);
@@ -56,6 +58,7 @@ public class CarFactory : IVehicleFactory
             Year = year,
             Type = VehicleType.Car,
             CapacityKg = 400,
+            CapacityM3 = 3.5,
             Status = VehicleStatus.Available
         };
         vehicle.UpdateLocation(latitude, longitude);
@@ -76,6 +79,7 @@ public class MotorcycleFactory : IVehicleFactory
             Year = year,
             Type = VehicleType.Motorcycle,
             CapacityKg = 30,
+            CapacityM3 = 0.3,
             Status = VehicleStatus.Available
         };
         vehicle.UpdateLocation(latitude, longitude);
