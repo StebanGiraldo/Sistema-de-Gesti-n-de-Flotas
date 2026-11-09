@@ -76,6 +76,8 @@ const FleetAPI = {
 
   // --- Comandos con deshacer/rehacer (Command): las mismas operaciones de arriba, pero quedan en el historial del usuario ---
   commandCreateRoute: (data) => apiFetch('/commands/routes', { method: 'POST', body: JSON.stringify(data) }),
+  commandCreateExpressRoute: (data) => apiFetch('/commands/routes/express', { method: 'POST', body: JSON.stringify(data) }),
+  commandDuplicateRoute: (id, newScheduledDate) => apiFetch(`/commands/routes/${id}/duplicate`, { method: 'POST', body: JSON.stringify({ newScheduledDate }) }),
   commandApplyRouteOptimization: (id) => apiFetch(`/commands/routes/${id}/optimization`, { method: 'POST' }),
   commandApplyDispatch: (data) => apiFetch('/commands/dispatch/apply', { method: 'POST', body: JSON.stringify(data) }),
   getCommandHistory: () => apiFetch('/commands/history'),

@@ -15,6 +15,6 @@ public interface IUndoableAction
     /// <summary>Revierte lo que hizo. Lanza <see cref="CommandNotUndoableException"/> si el estado cambió y ya no es posible.</summary>
     Task UndoAsync();
 
-    /// <summary>Vuelve a ejecutar la operación con los datos de ahora (con las mismas reglas que la primera vez).</summary>
+    /// <summary>Vuelve a ejecutar la operación con los datos de ahora (con las mismas reglas que la primera vez). Lanza <see cref="CommandNotRedoableException"/> si lo que necesita dejó de existir para siempre.</summary>
     Task RedoAsync();
 }

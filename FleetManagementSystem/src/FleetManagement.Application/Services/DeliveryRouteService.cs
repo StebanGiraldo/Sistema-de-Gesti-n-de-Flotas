@@ -5,6 +5,7 @@ using FleetManagement.Application.Geo;
 using FleetManagement.Application.Interfaces;
 using FleetManagement.Application.Interfaces.Repositories;
 using FleetManagement.Application.Interfaces.Services;
+using FleetManagement.Application.Mediators;
 using FleetManagement.Domain.Entities;
 using FleetManagement.Domain.Enums;
 
@@ -24,6 +25,7 @@ public class DeliveryRouteService : IDeliveryRouteService
     private readonly IDeliveryRouteBuilder _routeBuilder; // BUILDER (Transient: una instancia nueva por cada request)
     private readonly DeliveryRouteDirector _routeDirector;
     private readonly IFleetAuditLogger _auditLogger;
+    private readonly IRouteColleague _routeLifecycle; // MEDIATOR: participante de rutas; coordina el vehículo a través del mediador
     private readonly IVehicleTypeProfileFactory? _profiles; // FLYWEIGHT: velocidad del tipo de vehículo (opcional)
 
     public DeliveryRouteService(
@@ -33,6 +35,7 @@ public class DeliveryRouteService : IDeliveryRouteService
         IDeliveryRouteBuilder routeBuilder,
         DeliveryRouteDirector routeDirector,
         IFleetAuditLogger auditLogger,
+        IRouteColleague routeLifecycle,
         IVehicleTypeProfileFactory? profiles = null)
     {
         _routeRepository = routeRepository;
@@ -41,6 +44,7 @@ public class DeliveryRouteService : IDeliveryRouteService
         _routeBuilder = routeBuilder;
         _routeDirector = routeDirector;
         _auditLogger = auditLogger;
+        _routeLifecycle = routeLifecycle;
         _profiles = profiles;
     }
 
@@ -153,41 +157,13 @@ public class DeliveryRouteService : IDeliveryRouteService
         if (!Enum.TryParse<DeliveryRouteStatus>(status, true, out var newStatus))
             throw new ArgumentException($"Estado de ruta inválido: '{status}'.");
 
-        route.Status = newStatus;
-        await _routeRepository.UpdateAsync(route);
-
-        // Mantiene coherente el estado del vehículo asignado con el estado de la ruta.
-        if (route.AssignedVehicleId is { } vehicleId)
-        {
-            var vehicle = await _vehicleRepository.GetByIdAsync(vehicleId);
-            if (vehicle is not null)
-            {
-                vehicle.Status = newStatus switch
-                {
-                    DeliveryRouteStatus.InProgress or DeliveryRouteStatus.Delayed => VehicleStatus.EnRoute,
-                    DeliveryRouteStatus.Completed or DeliveryRouteStatus.Cancelled => ReleasedStatus(vehicle.Status, await UsedByAnotherActiveRouteAsync(vehicleId, route.Id)),
-                    _ => vehicle.Status
-                };
-                await _vehicleRepository.UpdateAsync(vehicle);
-            }
-        }
+        // MEDIATOR: el participante de rutas guarda el nuevo estado y se lo comunica al mediador, que mantiene coherente al
+        // vehículo asignado (En ruta, Disponible o sin cambios; ver Application/Mediators). Este servicio ya no conoce esas
+        // reglas ni toca al vehículo: sigue validando la petición y auditando el cambio.
+        await _routeLifecycle.ChangeStatusAsync(route, newStatus);
 
         _auditLogger.LogEvent("Ruta", $"Ruta '{route.Name}' cambió su estado a {newStatus}.");
     }
-
-    /// <summary>
-    /// Al terminar o cancelar un viaje solo se libera al vehículo que iba "En ruta" y que no sigue ocupado en otro viaje
-    /// activo (cancelar una ruta planificada no debe liberar al que va en camino con otra). Uno que está en mantenimiento o
-    /// fuera de servicio conserva ese estado: terminar una ruta no lo repara.
-    /// </summary>
-    private static VehicleStatus ReleasedStatus(VehicleStatus current, bool usedByAnotherTrip)
-        => current == VehicleStatus.EnRoute && !usedByAnotherTrip ? VehicleStatus.Available : current;
-
-    private async Task<bool> UsedByAnotherActiveRouteAsync(Guid vehicleId, Guid routeId)
-        => (await _routeRepository.GetAllAsync()).Any(other =>
-            other.Id != routeId
-            && other.AssignedVehicleId == vehicleId
-            && other.Status is DeliveryRouteStatus.InProgress or DeliveryRouteStatus.Delayed);
 
     // ------------------------------------------------------------------
     // Estimación de distancia/tiempo (heurística de optimización de rutas)

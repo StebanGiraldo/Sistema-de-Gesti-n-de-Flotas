@@ -9,4 +9,7 @@ public interface IDeliveryRouteRepository
     Task<IReadOnlyList<DeliveryRoute>> GetByDriverIdAsync(Guid driverId);
     Task<DeliveryRoute> AddAsync(DeliveryRoute route);
     Task UpdateAsync(DeliveryRoute route);
+
+    /// <summary>Elimina la ruta. Si no existe, no hace nada.</summary>
+    Task DeleteAsync(Guid id);
 }

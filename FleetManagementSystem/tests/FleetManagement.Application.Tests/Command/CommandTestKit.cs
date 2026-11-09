@@ -18,7 +18,7 @@ namespace FleetManagement.Application.Tests.Command;
 
 /// <summary>
 /// Todo lo que usan las órdenes, armado como en producción pero con repositorios en memoria: el servicio de rutas protegido
-/// por las reglas de asignación, la optimización, el reparto, la foto de paradas, el cancelador, la fábrica de órdenes y el
+/// por las reglas de asignación, la optimización, el reparto, la foto de paradas, el eliminador de rutas, la fábrica de órdenes y el
 /// invocador. Así las pruebas de las órdenes ejercitan los servicios reales, no copias.
 /// </summary>
 public sealed class CommandTestKit
@@ -31,7 +31,7 @@ public sealed class CommandTestKit
         var optimizer = new TwoOptRouteOptimizer(new NearestNeighborRouteOptimizer());
 
         Routes = new AssignmentValidatingRouteService(
-            new DeliveryRouteService(Fleet.Routes, Fleet.Vehicles, Fleet.Drivers, new DeliveryRouteBuilder(), new DeliveryRouteDirector(), Audit, profiles),
+            new DeliveryRouteService(Fleet.Routes, Fleet.Vehicles, Fleet.Drivers, new DeliveryRouteBuilder(), new DeliveryRouteDirector(), Audit, FleetMediators.CreateRouteColleague(Fleet.Routes, Fleet.Vehicles), profiles),
             Fleet.Validator);
         Optimization = new RouteOptimizationService(Fleet.Routes, Fleet.Vehicles, optimizer, Audit, profiles);
         Dispatch = new DispatchPlanningService(
@@ -39,8 +39,8 @@ public sealed class CommandTestKit
             new DispatchPlanner(new PriorityBestFitStrategy(), new PriorityStopSequencer(optimizer)),
             Audit, profiles);
         Snapshots = new RouteSnapshotService(Fleet.Routes);
-        Canceller = new PlannedRouteCanceller(Routes);
-        Commands = new RouteCommandFactory(Routes, Optimization, Dispatch, Snapshots, Canceller);
+        Deleter = new PlannedRouteDeleter(Fleet.Routes, Audit);
+        Commands = new RouteCommandFactory(Routes, Optimization, Dispatch, Snapshots, Deleter);
         Invoker = new CommandInvoker(Store, Audit, Clock);
     }
 
@@ -53,7 +53,7 @@ public sealed class CommandTestKit
     public RouteOptimizationService Optimization { get; }
     public DispatchPlanningService Dispatch { get; }
     public RouteSnapshotService Snapshots { get; }
-    public PlannedRouteCanceller Canceller { get; }
+    public PlannedRouteDeleter Deleter { get; }
     public RouteCommandFactory Commands { get; }
     public CommandInvoker Invoker { get; }
 
@@ -82,6 +82,9 @@ public sealed class CommandTestKit
         => (await Fleet.Routes.GetByIdAsync(routeId))!.Waypoints.OrderBy(waypoint => waypoint.Order).Select(waypoint => waypoint.Label).ToArray();
 
     public async Task<DeliveryRoute> RouteAsync(Guid routeId) => (await Fleet.Routes.GetByIdAsync(routeId))!;
+
+    /// <summary>Si la ruta sigue guardada. Deshacer su creación la elimina: ya no existe (no queda «cancelada»).</summary>
+    public async Task<bool> RouteExistsAsync(Guid routeId) => await Fleet.Routes.GetByIdAsync(routeId) is not null;
 
     public async Task<IReadOnlyList<DeliveryRoute>> AllRoutesAsync() => await Fleet.Routes.GetAllAsync();
 

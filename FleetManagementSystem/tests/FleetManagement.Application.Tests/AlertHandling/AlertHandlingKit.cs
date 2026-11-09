@@ -3,6 +3,7 @@ using FleetManagement.Application.DTOs;
 using FleetManagement.Application.Services;
 using FleetManagement.Application.Tests.Bridge;
 using FleetManagement.Application.Tests.Decorator;
+using FleetManagement.Application.Tests.Support;
 using FleetManagement.Domain.Entities;
 using FleetManagement.Domain.Enums;
 using FleetManagement.Infrastructure.Persistence;
@@ -19,7 +20,7 @@ public sealed class AlertHandlingKit
 
     public AlertHandlingKit()
     {
-        Inner = new TripAlertService(Alerts, Routes, Audit, Channel);
+        Inner = new TripAlertService(Alerts, Routes, Audit, Channel, FleetMediators.CreateRouteColleague(Routes, Vehicles));
         Chain = DefaultAlertHandlerChain.Create(Options, Inner, Channel, Audit);
         Service = new AlertHandlingTripAlertService(Inner, Chain);
     }
@@ -28,6 +29,7 @@ public sealed class AlertHandlingKit
     public RecordingNotificationChannel Channel { get; } = new();
     public InMemoryTripAlertRepository Alerts { get; } = new();
     public InMemoryDeliveryRouteRepository Routes { get; } = new();
+    public InMemoryVehicleRepository Vehicles { get; } = new();
     public AlertHandlingOptions Options { get; } = new();
 
     public TripAlertService Inner { get; }

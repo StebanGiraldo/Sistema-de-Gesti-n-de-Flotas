@@ -26,4 +26,15 @@ public class CargoManifestController : ControllerBase
         var manifest = await _manifestService.GetManifestAsync(id);
         return manifest is null ? NotFound(new { message = "Ruta no encontrada." }) : Ok(manifest);
     }
+
+    /// <summary>
+    /// Los mismos artículos del manifiesto, pero como lista plana en el orden del recorrido en profundidad
+    /// (patrón Iterator). Endpoint adicional: no cambia el de arriba ni su contrato.
+    /// </summary>
+    [HttpGet("{id:guid}/cargo-items")]
+    public async Task<ActionResult<CargoManifestItemsDto>> GetCargoItems(Guid id)
+    {
+        var items = await _manifestService.GetCargoItemsAsync(id);
+        return items is null ? NotFound(new { message = "Ruta no encontrada." }) : Ok(items);
+    }
 }

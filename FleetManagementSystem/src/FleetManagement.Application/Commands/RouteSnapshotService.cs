@@ -5,6 +5,11 @@ using FleetManagement.Domain.Enums;
 
 namespace FleetManagement.Application.Commands;
 
+/// <summary>
+/// ORIGINATOR (patrón MEMENTO): crea el recuerdo con el orden de las paradas y las estimaciones de la ruta y es el único que
+/// sabe volver a ese estado. La restauración es "todo o nada": primero verifica que la ruta siga planificada y con las mismas
+/// paradas, y solo entonces cambia algo.
+/// </summary>
 public sealed class RouteSnapshotService : IRouteSnapshotService
 {
     private readonly IDeliveryRouteRepository _routes;
@@ -20,14 +25,21 @@ public sealed class RouteSnapshotService : IRouteSnapshotService
         return new RouteSnapshot(
             route.Id,
             route.Name,
-            route.Waypoints.Select(waypoint => new WaypointPosition(waypoint.Id, waypoint.Order)).ToList(),
+            route.Waypoints.Select(waypoint => new WaypointPosition(waypoint.Id, waypoint.Order)),
             route.EstimatedDistanceKm,
             route.EstimatedDurationMinutes);
     }
 
-    public async Task RestoreStopOrderAsync(RouteSnapshot snapshot)
+    public async Task RestoreStopOrderAsync(IRouteMemento memento)
     {
-        var route = await FindAsync(snapshot.RouteId);
+        ArgumentNullException.ThrowIfNull(memento);
+
+        // Solo se restaura con un recuerdo propio: uno ajeno no trae las paradas ni las estimaciones que hacen falta.
+        if (memento is not RouteSnapshot snapshot)
+            throw new ArgumentException("El recuerdo no lo creó este servicio (CaptureAsync); no se puede restaurar a partir de él.", nameof(memento));
+
+        var route = await _routes.GetByIdAsync(snapshot.RouteId)
+            ?? throw new CommandNotUndoableException($"La ruta '{snapshot.RouteName}' ya no existe; no se puede restaurar el orden de sus paradas.");
         if (route.Status != DeliveryRouteStatus.Planned)
             throw new CommandNotUndoableException($"La ruta '{route.Name}' ya no está planificada (está {RouteStatusText.Describe(route.Status)}); no se puede restaurar el orden de sus paradas.");
 

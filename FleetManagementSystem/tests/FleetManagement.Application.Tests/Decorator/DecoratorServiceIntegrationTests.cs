@@ -3,6 +3,7 @@ using FleetManagement.Application.Factories;
 using FleetManagement.Application.Interfaces;
 using FleetManagement.Application.Services;
 using FleetManagement.Application.Tests.Bridge;
+using FleetManagement.Application.Tests.Support;
 using FleetManagement.Domain.Entities;
 using FleetManagement.Domain.Enums;
 using FleetManagement.Infrastructure.Persistence;
@@ -83,7 +84,7 @@ public class DecoratorServiceIntegrationTests
         });
         var channel = new RecordingNotificationChannel();
         var audit = new RecordingAuditLogger();
-        var service = new TripAlertService(new InMemoryTripAlertRepository(), routeRepository, audit, channel);
+        var service = new TripAlertService(new InMemoryTripAlertRepository(), routeRepository, audit, channel, FleetMediators.CreateRouteColleague(routeRepository, new InMemoryVehicleRepository()));
 
         await service.CreateAlertAsync(new CreateTripAlertRequest(route.Id, alertType, "Descripción de prueba", 15));
 

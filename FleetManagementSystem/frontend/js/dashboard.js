@@ -433,9 +433,10 @@ function canOptimizeRoute(route) {
 
 async function duplicateRoute(routeId) {
   try {
-    await FleetAPI.duplicateRoute(routeId, null);
+    await FleetAPI.commandDuplicateRoute(routeId, null);
     showToast('Ruta duplicada para el día siguiente (patrón Prototype).', 'success');
     await refreshRoutes();
+    await refreshCommandHistory();
   } catch (err) {
     showToast(err.message, 'error');
   }
@@ -666,7 +667,7 @@ document.getElementById('createExpressRouteBtn').addEventListener('click', async
     e.preventDefault();
     const fd = new FormData(e.target);
     try {
-      await FleetAPI.createExpressRoute({
+      await FleetAPI.commandCreateExpressRoute({
         name: fd.get('name'),
         originLat: parseFloat(fd.get('originLat')), originLng: parseFloat(fd.get('originLng')),
         destinationLat: parseFloat(fd.get('destinationLat')), destinationLng: parseFloat(fd.get('destinationLng')),
@@ -675,6 +676,7 @@ document.getElementById('createExpressRouteBtn').addEventListener('click', async
       closeModal();
       showToast('Ruta express creada (Builder + Director).', 'success');
       await refreshRoutes();
+      await refreshCommandHistory();
     } catch (err) {
       showToast(err.message, 'error');
     }

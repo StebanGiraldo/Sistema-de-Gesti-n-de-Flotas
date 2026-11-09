@@ -9,6 +9,7 @@ using FleetManagement.Application.Flyweights;
 using FleetManagement.Application.Interfaces;
 using FleetManagement.Application.Interfaces.Repositories;
 using FleetManagement.Application.Interfaces.Services;
+using FleetManagement.Application.Mediators;
 using FleetManagement.Application.Optimization;
 using FleetManagement.Application.Reports;
 using FleetManagement.Application.Services;
@@ -157,6 +158,13 @@ builder.Services.AddScoped<IDriverService, DriverService>();
 // DECORATOR: las reglas de asignación (capacidad, disponibilidad, doble asignación) se comprueban ANTES de delegar en
 // el servicio real de rutas. Todo el que pida IDeliveryRouteService (controladores, simulador) recibe la versión protegida.
 builder.Services.AddScoped<IRouteAssignmentValidator, RouteAssignmentValidator>();
+// MEDIATOR (patrón de comportamiento): la coordinación entre el estado de una ruta y el de su vehículo ya no está repartida
+// entre los servicios. El participante de rutas avisa al mediador y éste dirige al participante de vehículos (ver
+// Application/Mediators). No guardan estado, así que se registran por petición (Scoped) como los servicios que los usan.
+// No hay referencias circulares: servicios → participante de rutas → mediador → participante de vehículos → repositorio.
+builder.Services.AddScoped<IVehicleColleague, VehicleColleague>();
+builder.Services.AddScoped<IFleetLifecycleMediator, FleetLifecycleMediator>();
+builder.Services.AddScoped<IRouteColleague, RouteColleague>();
 builder.Services.AddScoped<DeliveryRouteService>();
 builder.Services.AddScoped<IDeliveryRouteService>(provider => new AssignmentValidatingRouteService(
     provider.GetRequiredService<DeliveryRouteService>(),
@@ -201,10 +209,11 @@ builder.Services.AddScoped<ITripAlertService>(provider =>
 // COMMAND (patrón de comportamiento): crear una ruta, aplicar el orden optimizado y aplicar el plan de reparto se pueden
 // pedir como órdenes (api/commands) que se guardan en el historial de quien las pidió y se deshacen o rehacen. El historial
 // es Singleton (debe vivir más que una petición) y los comandos se arman por petición (Scoped), con los mismos servicios
-// de siempre: los endpoints anteriores no cambian. Deshacer una ruta creada la cancela (no se borra: la auditoría se conserva).
+// de siempre: los endpoints anteriores no cambian. Deshacer una ruta creada la ELIMINA (no la deja cancelada, para que deshacer y
+// rehacer repetidos no acumulen rutas canceladas); la auditoría es un registro aparte y se conserva.
 builder.Services.AddSingleton<ICommandHistoryStore>(new InMemoryCommandHistoryStore());
 builder.Services.AddScoped<IRouteSnapshotService, RouteSnapshotService>();
-builder.Services.AddScoped<IPlannedRouteCanceller, PlannedRouteCanceller>();
+builder.Services.AddScoped<IPlannedRouteDeleter, PlannedRouteDeleter>();
 builder.Services.AddScoped<IRouteCommandFactory, RouteCommandFactory>();
 builder.Services.AddScoped<ICommandInvoker, CommandInvoker>();
 builder.Services.AddScoped<IAuthService, AuthService>();

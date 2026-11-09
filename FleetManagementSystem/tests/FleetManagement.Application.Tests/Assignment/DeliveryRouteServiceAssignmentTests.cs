@@ -5,6 +5,7 @@ using FleetManagement.Application.Flyweights;
 using FleetManagement.Application.Geo;
 using FleetManagement.Application.Services;
 using FleetManagement.Application.Tests.Decorator;
+using FleetManagement.Application.Tests.Support;
 using FleetManagement.Domain.Entities;
 using FleetManagement.Domain.Enums;
 using FleetManagement.Infrastructure.Persistence;
@@ -24,7 +25,7 @@ public class DeliveryRouteServiceAssignmentTests
     private readonly IVehicleTypeProfileFactory _profiles = new VehicleTypeProfileFactory(new FleetOnboardingFactoryProvider());
 
     private DeliveryRouteService ServiceWith(IVehicleTypeProfileFactory? profiles)
-        => new(_routes, _vehicles, _drivers, new DeliveryRouteBuilder(), new DeliveryRouteDirector(), new RecordingAuditLogger(), profiles);
+        => new(_routes, _vehicles, _drivers, new DeliveryRouteBuilder(), new DeliveryRouteDirector(), new RecordingAuditLogger(), FleetMediators.CreateRouteColleague(_routes, _vehicles), profiles);
 
     private async Task<(DeliveryRoute Route, Vehicle Vehicle)> RouteWithVehicleAsync(VehicleStatus vehicleStatus, DeliveryRouteStatus routeStatus)
     {

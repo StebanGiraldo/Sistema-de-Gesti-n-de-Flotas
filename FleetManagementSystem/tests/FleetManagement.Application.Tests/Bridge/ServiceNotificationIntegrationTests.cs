@@ -1,6 +1,7 @@
 using FleetManagement.Application.DTOs;
 using FleetManagement.Application.Factories;
 using FleetManagement.Application.Services;
+using FleetManagement.Application.Tests.Support;
 using FleetManagement.Domain.Entities;
 using FleetManagement.Domain.Enums;
 using FleetManagement.Infrastructure.Logging;
@@ -92,7 +93,7 @@ public class ServiceNotificationIntegrationTests
         });
 
         var channel = new RecordingNotificationChannel();
-        var service = new TripAlertService(new InMemoryTripAlertRepository(), routeRepository, FleetAuditLogger.Instance, channel);
+        var service = new TripAlertService(new InMemoryTripAlertRepository(), routeRepository, FleetAuditLogger.Instance, channel, FleetMediators.CreateRouteColleague(routeRepository, new InMemoryVehicleRepository()));
 
         await service.CreateAlertAsync(new CreateTripAlertRequest(route.Id, "Breakdown", "Falla mecánica en el motor", 30));
 

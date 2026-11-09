@@ -6,6 +6,7 @@ using FleetManagement.Application.Geo;
 using FleetManagement.Application.Optimization;
 using FleetManagement.Application.Services;
 using FleetManagement.Application.Tests.Decorator;
+using FleetManagement.Application.Tests.Support;
 using FleetManagement.Domain.Entities;
 using FleetManagement.Domain.Enums;
 using FleetManagement.Infrastructure.Persistence;
@@ -378,7 +379,7 @@ public class RouteOptimizationServiceTests
     {
         // Dos cálculos distintos (el de crear una ruta y el de optimizarla) tienen que dar la misma distancia y el mismo tiempo.
         var van = await AddVehicleAsync(VehicleType.Van);
-        var creator = new DeliveryRouteService(_routes, _vehicles, new InMemoryDriverRepository(), new DeliveryRouteBuilder(), new DeliveryRouteDirector(), _audit, _profiles);
+        var creator = new DeliveryRouteService(_routes, _vehicles, new InMemoryDriverRepository(), new DeliveryRouteBuilder(), new DeliveryRouteDirector(), _audit, FleetMediators.CreateRouteColleague(_routes, _vehicles), _profiles);
         static WaypointDto Stop(string label, double longitude, int order) => new(0, longitude, label, order);
         var zigZag = await creator.CreateRouteAsync(new CreateDeliveryRouteRequest("zig-zag", 0, 0, 0, 0.6,
             new List<WaypointDto> { Stop("A", 0.5, 0), Stop("B", 0.1, 1), Stop("C", 0.3, 2) }, null, van.Id, null, null));

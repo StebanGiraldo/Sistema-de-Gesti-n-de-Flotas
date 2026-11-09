@@ -21,9 +21,9 @@ public sealed class RealFleet
     public RealFleet()
     {
         Vehicles = new VehicleService(VehicleRepository, DriverRepository, new VehicleFactoryProvider(), new FleetOnboardingFactoryProvider(), Audit, Channel);
-        Routes = new DeliveryRouteService(RouteRepository, VehicleRepository, DriverRepository, new DeliveryRouteBuilder(), new DeliveryRouteDirector(), Audit);
+        Routes = new DeliveryRouteService(RouteRepository, VehicleRepository, DriverRepository, new DeliveryRouteBuilder(), new DeliveryRouteDirector(), Audit, FleetMediators.CreateRouteColleague(RouteRepository, VehicleRepository));
         Maintenance = new MaintenanceService(MaintenanceRepository, VehicleRepository, DriverRepository, Audit, Channel);
-        Alerts = new TripAlertService(AlertRepository, RouteRepository, Audit, Channel);
+        Alerts = new TripAlertService(AlertRepository, RouteRepository, Audit, Channel, FleetMediators.CreateRouteColleague(RouteRepository, VehicleRepository));
         Manifests = new CargoManifestService(RouteRepository);
     }
 

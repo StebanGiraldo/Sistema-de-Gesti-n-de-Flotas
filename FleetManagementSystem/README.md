@@ -36,6 +36,9 @@ Operador), un dashboard administrativo y un portal para conductores.
    - [8.12 Decorator — reglas de asignación sobre el servicio de rutas](#812-decorator--reglas-de-asignación-sobre-el-servicio-de-rutas)
    - [8.13 Command — deshacer y rehacer operaciones de rutas](#813-command--deshacer-y-rehacer-operaciones-de-rutas)
    - [8.14 Chain of Responsibility — de la alerta reportada a quien debe atenderla](#814-chain-of-responsibility--de-la-alerta-reportada-a-quien-debe-atenderla)
+   - [8.15 Iterator — recorrer la carga de una ruta sin conocer su estructura](#815-iterator--recorrer-la-carga-de-una-ruta-sin-conocer-su-estructura)
+   - [8.16 Mediator — coordinar el estado de la ruta con el del vehículo](#816-mediator--coordinar-el-estado-de-la-ruta-con-el-del-vehículo)
+   - [8.17 Memento — volver al orden anterior de las paradas](#817-memento--volver-al-orden-anterior-de-las-paradas)
 9. [Documentación de la API REST](#9-documentación-de-la-api-rest)
 10. [Notas sobre paso a producción](#10-notas-sobre-paso-a-producción)
 11. [Limitaciones conocidas del prototipo](#11-limitaciones-conocidas-del-prototipo)
@@ -116,6 +119,7 @@ FleetManagementSystem/
 ├── src/
 │   ├── FleetManagement.Domain/
 │   │   ├── Common/IPrototype.cs                     ← contrato del patrón Prototype
+│   │   ├── Cargo/ ← COMPOSITE de la carga (sección 8.7) e ITERATOR que la recorre (sección 8.15)
 │   │   ├── Entities/ (Vehicle, DeliveryRoute, Driver, AppUser, Waypoint,
 │   │   │              CargoItem, MaintenanceRecord, MaintenancePlan,
 │   │   │              NavigationProfile, TripAlert)
@@ -134,7 +138,8 @@ FleetManagementSystem/
 │   │   ├── Geo/        ← GeoMath (Haversine, interpolación), TripEstimate (minutos = km / velocidad) y VehicleSpeed: compartidos por rutas, simulación y plan de reparto
 │   │   ├── Assignment/ ← reglas de asignación (capacidad, disponibilidad, doble asignación) y el DECORATOR que las aplica (sección 8.12)
 │   │   ├── Optimization/ ← STRATEGY: orden de las paradas, reparto de entregas y secuencia de cada viaje (sección 8.11)
-│   │   ├── Commands/   ← COMMAND: órdenes que se pueden deshacer y rehacer, su invocador y el historial por usuario (sección 8.13)
+│   │   ├── Commands/   ← COMMAND: órdenes que se pueden deshacer y rehacer, su invocador y el historial por usuario (sección 8.13); y el MEMENTO del orden de las paradas (sección 8.17)
+│   │   ├── Mediators/  ← MEDIATOR: coordina el estado de la ruta con el de su vehículo (sección 8.16)
 │   │   ├── AlertHandling/ ← CHAIN OF RESPONSIBILITY: validar, registrar, clasificar y escalar una alerta (sección 8.14)
 │   │   ├── Simulation/ ← simulación del recorrido sobre la ruta asignada (secciones 5.3 y 10)
 │   │   ├── Flyweights/ ← FLYWEIGHT: perfil compartido por tipo de vehículo (sección 8.9)
@@ -161,8 +166,11 @@ FleetManagementSystem/
 │       ├── Metrics/, Flyweight/, Proxy/, Simulation/, Geo/, Architecture/, Support/
 │       ├── Assignment/    ← reglas de asignación y su Decorator (sección 8.12)
 │       ├── Optimization/  ← Strategy: orden de paradas, reparto, plan y optimización de una ruta (sección 8.11)
-│       ├── Command/       ← Command: historial, invocador, órdenes de rutas, foto de paradas y cancelador (sección 8.13)
-│       └── AlertHandling/ ← Chain of Responsibility: cadena, manejadores, política de gravedad, opciones y decorador (sección 8.14)
+│       ├── Command/       ← Command: historial, invocador, órdenes de rutas, foto de paradas y eliminador de rutas (sección 8.13)
+│       ├── AlertHandling/ ← Chain of Responsibility: cadena, manejadores, política de gravedad, opciones y decorador (sección 8.14)
+│       ├── Iterator/      ← Iterator: recorrido de la carga y lista plana de artículos (sección 8.15)
+│       ├── Mediator/      ← Mediator: participantes, reglas ruta-vehículo, diseño e integración con servicios reales (sección 8.16)
+│       └── Memento/       ← Memento: recuerdo, restauración, rechazos y su uso desde Command (sección 8.17)
 │
 └── frontend/
     ├── login.html
@@ -569,8 +577,8 @@ pasan de "volver a diligenciar todos los campos" a "clonar y ajustar dos datos".
 | Singleton (`FleetAuditLogger`) | `GET /api/audit/logs` | Pestaña "Auditoría" |
 | Factory Method (`IVehicleFactory`) | `POST /api/fleet/vehicles` | "+ Vehículo" |
 | Abstract Factory (`IFleetOnboardingAbstractFactory`) | `POST /api/fleet/vehicles` (mismo endpoint, un paso después del Factory Method) | "+ Vehículo" |
-| Builder (`IDeliveryRouteBuilder` + `DeliveryRouteDirector`) | `POST /api/routes` y `POST /api/routes/express` | "+ Nueva ruta" / "⚡ Ruta express" |
-| Prototype (`IPrototype<T>`) | `POST /api/fleet/vehicles/{id}/clone` y `POST /api/routes/{id}/duplicate` | ⧉ junto a cada vehículo / ruta |
+| Builder (`IDeliveryRouteBuilder` + `DeliveryRouteDirector`) | `POST /api/routes` y `POST /api/routes/express` (el panel usa sus versiones con historial, `/api/commands/routes` y `/api/commands/routes/express`, que llaman al mismo servicio) | "+ Nueva ruta" / "⚡ Ruta express" |
+| Prototype (`IPrototype<T>`) | `POST /api/fleet/vehicles/{id}/clone` y `POST /api/routes/{id}/duplicate` (el panel usa la versión con historial, `/api/commands/routes/{id}/duplicate`, que llama al mismo servicio) | ⧉ junto a cada vehículo / ruta |
 | Adapter (`INavigationProvider` + `GoogleMapsAdapter`) | `GET /api/navigation/route/{routeId}` | Enlace de navegación de la ruta |
 | Bridge (`FleetNotification` + `INotificationChannel`) | `POST /api/maintenance`, `POST /api/alerts`, `PATCH /api/fleet/vehicles/{id}/status` (el envío simulado aparece en la consola del backend) | — |
 | Composite (`ICargoComponent` / `CargoGroup`) | `GET /api/routes/{id}/cargo-manifest` | — |
@@ -581,8 +589,11 @@ pasan de "volver a diligenciar todos los campos" a "clonar y ajustar dos datos".
 | Proxy (`CachingNavigationProviderProxy`) | `GET /api/navigation/route/{routeId}` (el mismo endpoint del Adapter: la segunda consulta de la misma ruta sale del caché) | Enlace de navegación de la ruta |
 | Strategy (`IRouteOptimizer`, `ICargoAssignmentStrategy`, `IStopSequencer`) | `POST /api/dispatch/plan`, `POST /api/dispatch/apply`, `GET` y `POST /api/routes/{id}/optimization` | "🧭 Planificar reparto" / "🧭 Optimizar" |
 | Decorator de reglas de asignación (`AssignmentValidatingRouteService`) | `POST /api/routes`, `POST /api/routes/express`, `PATCH /api/routes/{id}/status` (responden 400 con los mensajes de las reglas incumplidas) | "+ Nueva ruta" (aviso rojo de capacidad), cambio de estado de la ruta |
-| Command (`ICommand<T>` / `IUndoableCommand<T>` + `CommandInvoker`) | `POST /api/commands/routes`, `POST /api/commands/routes/{id}/optimization`, `POST /api/commands/dispatch/apply`, `GET /api/commands/history`, `POST /api/commands/undo`, `POST /api/commands/redo` | «+ Nueva ruta», «Crear rutas del plan», «Aplicar este orden» y los botones «↶ Deshacer» / «↷ Rehacer» |
+| Command (`ICommand<T>` / `IUndoableCommand<T>` + `CommandInvoker`) | `POST /api/commands/routes`, `POST /api/commands/routes/express`, `POST /api/commands/routes/{id}/duplicate`, `POST /api/commands/routes/{id}/optimization`, `POST /api/commands/dispatch/apply`, `GET /api/commands/history`, `POST /api/commands/undo`, `POST /api/commands/redo` | «+ Nueva ruta», «⚡ Ruta express», «⧉ Duplicar», «Crear rutas del plan», «Aplicar este orden» y los botones «↶ Deshacer» / «↷ Rehacer» |
 | Chain of Responsibility (`IAlertHandler` + `AlertHandlingTripAlertService`) | `POST /api/alerts` (la alerta pasa por la cadena; las graves y críticas generan un aviso de escalamiento visible en `GET /api/audit/logs`) | «🚨 Reportar complicación» del portal del conductor |
+| Iterator (`ICargoIterator` + `CargoDepthFirstIterator`) | `GET /api/routes/{id}/cargo-items` (los mismos artículos del `cargo-manifest`, como lista plana en el orden del recorrido) | — |
+| Mediator (`IFleetLifecycleMediator` + `IRouteColleague` / `IVehicleColleague`) | `PATCH /api/routes/{id}/status` (el vehículo asignado queda En ruta o Disponible según el estado) y `POST /api/alerts` con retraso (la ruta queda Retrasada) | Cambio de estado de la ruta y «🚨 Reportar complicación» |
+| Memento (`IRouteMemento` / `RouteSnapshot` + `IRouteSnapshotService`) | `POST /api/commands/routes/{id}/optimization` guarda el recuerdo; `POST /api/commands/undo` y `POST /api/commands/redo` lo usan | «Aplicar este orden», «↶ Deshacer» y «↷ Rehacer» |
 
 ### 8.7 Patrones estructurales: Adapter, Bridge, Composite y Decorator
 
@@ -935,7 +946,8 @@ builder.Services.AddScoped<IDeliveryRouteService>(provider => new AssignmentVali
 - **Terminar o cancelar un viaje nunca se bloquea.** Al hacerlo solo se libera al vehículo que figuraba "en ruta": uno que
   entretanto pasó a mantenimiento o fuera de servicio conserva ese estado. Tampoco se libera si el vehículo sigue en **otro**
   viaje activo (en curso o retrasado): se corrigió al agregar Command ([8.13](#813-command--deshacer-y-rehacer-operaciones-de-rutas)),
-  porque deshacer cancela rutas y antes podía dejar «disponible» a un vehículo que seguía ocupado.
+  porque cancelar una ruta planificada podía dejar «disponible» a un vehículo que seguía ocupado en otro viaje (un defecto que ya
+  existía; deshacer una creación ya no cancela la ruta, la elimina).
 - `CapacityM3` es un dato nuevo de `Vehicle` (camión 40 m³, furgoneta 10, auto 3,5, moto 0,3; las fábricas y los datos de
   demostración lo traen, y el Prototype lo copia). El formulario de nueva ruta pide el volumen de cada artículo y avisa en
   rojo, antes de enviar, si la carga supera la capacidad del vehículo elegido; el servidor lo valida de todos modos.
@@ -944,26 +956,30 @@ builder.Services.AddScoped<IDeliveryRouteService>(provider => new AssignmentVali
 
 ### 8.13 Command — deshacer y rehacer operaciones de rutas
 
-Tres operaciones del módulo de rutas se pueden pedir como **órdenes** que se guardan en un historial y se pueden
-**deshacer y rehacer**: *crear una ruta*, *aplicar el orden optimizado de las paradas* y *aplicar el plan de reparto*. Cada
-orden es un objeto que sabe ejecutarse, deshacerse y rehacerse; un **invocador** las ejecuta y las anota en el historial de
-quien las pidió. **Los endpoints de siempre no cambian** (`POST /api/routes`, `POST /api/routes/{id}/optimization` y
-`POST /api/dispatch/apply` hacen lo mismo que antes y no dejan historial): las órdenes viven en un controlador aparte,
-`api/commands`, y el panel administrativo ahora usa ese para las tres operaciones («+ Nueva ruta», «Crear rutas del plan» y
-«Aplicar este orden»). «⚡ Ruta express» sigue usando `POST /api/routes/express` y no deja historial.
+Las operaciones del módulo de rutas que se pueden deshacer se piden como **órdenes** que se guardan en un historial y se
+pueden **deshacer y rehacer**: *crear una ruta* (por cualquiera de sus tres caminos: el formulario «+ Nueva ruta», «⚡ Ruta
+express» o «⧉ Duplicar»), *aplicar el orden optimizado de las paradas* y *aplicar el plan de reparto*. Cada orden es un objeto
+que sabe ejecutarse, deshacerse y rehacerse; un **invocador** las ejecuta y las anota en el historial de quien las pidió.
+**Los endpoints de siempre no cambian** (`POST /api/routes`, `POST /api/routes/express`, `POST /api/routes/{id}/duplicate`,
+`POST /api/routes/{id}/optimization` y `POST /api/dispatch/apply` hacen lo mismo que antes y no dejan historial): las órdenes
+viven en un controlador aparte, `api/commands`, y el panel administrativo usa ese para todas las operaciones de arriba
+(«+ Nueva ruta», «⚡ Ruta express», «⧉ Duplicar», «Crear rutas del plan» y «Aplicar este orden»). Si algún día se agrega otro
+camino para crear rutas, también debe pasar por `api/commands`: si no, esa ruta no entra al historial y «Deshacer» no la ve.
 
 | Pieza | Dónde está | Papel en el patrón |
 |-------|------------|--------------------|
 | `ICommand<TResult>` | `Application/Commands/` | **Command**: `ExecuteAsync()` y nada más. |
 | `IUndoableAction` | `Application/Commands/` | Lo que el historial necesita de cualquier orden, sin saber qué devuelve: descripción, si cambió algo (`HasEffect`), `UndoAsync()` y `RedoAsync()`. |
 | `IUndoableCommand<TResult>` | `Application/Commands/` | Una orden que se ejecuta **y** se puede deshacer (junta las dos anteriores). |
-| `CreateRouteCommand`, `ApplyRouteOptimizationCommand`, `ApplyDispatchPlanCommand` | `Application/Commands/` | **Concrete Commands**. Cada una usa los servicios que ya existían (los **Receivers**): no repite su lógica. |
+| `RouteCreationCommand` (clase base abstracta) | `Application/Commands/` | **Template Method**: lo que es igual en toda orden que *crea* una ruta —recordar cuál creó, `HasEffect`, deshacer (= eliminarla) y rehacer (= crear otra nueva)— se escribe **una sola vez**; cada subclase solo dice *cómo* se crea (`CreateAsync`) y cómo se describe. |
+| `CreateRouteCommand`, `CreateExpressRouteCommand`, `DuplicateRouteCommand`, `ApplyRouteOptimizationCommand`, `ApplyDispatchPlanCommand` | `Application/Commands/` | **Concrete Commands**. Las tres primeras heredan de `RouteCreationCommand` (formulario, «⚡ express» y «⧉ duplicar»). Cada una usa los servicios que ya existían (los **Receivers**): no repite su lógica. |
 | `ICommandInvoker` / `CommandInvoker` | `Application/Commands/` | **Invoker**: ejecuta, deshace y rehace; no sabe qué hace cada orden. |
 | `IRouteCommandFactory` / `RouteCommandFactory` | `Application/Commands/` | Arma cada orden con sus dependencias, para que el controlador no las conozca. |
 | `CommandHistory` | `Application/Commands/` | El historial de **un** usuario: lo que puede deshacer y rehacer (20 operaciones como máximo), con exclusión para que dos peticiones suyas no se pisen. |
 | `ICommandHistoryStore` / `InMemoryCommandHistoryStore` | `Application/Commands/` / `Infrastructure/Commands/` | Un historial por usuario, en memoria. |
-| `RouteSnapshot` / `IRouteSnapshotService` | `Application/Commands/` | **Memento**: la "foto" del orden de las paradas y de la distancia y el tiempo estimados, tomada antes de optimizar. |
-| `IPlannedRouteCanceller` | `Application/Commands/` | Cancela las rutas que creó una orden: todas o ninguna, y solo si siguen planificadas. |
+| `RouteSnapshot` / `IRouteMemento` / `IRouteSnapshotService` | `Application/Commands/` | **Memento** ([8.17](#817-memento--volver-al-orden-anterior-de-las-paradas)): la "foto" del orden de las paradas y de la distancia y el tiempo estimados, tomada antes de optimizar. |
+| `IPlannedRouteDeleter` / `PlannedRouteDeleter` | `Application/Commands/` | Elimina las rutas que creó una orden: todas o ninguna, y solo si siguen planificadas; deja constancia en la auditoría. |
+| `CommandNotUndoableException` / `CommandNotRedoableException` | `Application/Commands/` | El estado cambió y ya no se puede deshacer / rehacer (la ruta ya salió, o ya no existe): la API responde 409 y el invocador quita la operación del historial. |
 | `CommandsController` | `Api/Controllers/` | HTTP: traduce los resultados y los errores. |
 | `commands.js` y los botones «↶ Deshacer» / «↷ Rehacer» | `frontend/` | Muestran el historial del usuario y piden deshacer o rehacer. |
 
@@ -972,6 +988,8 @@ classDiagram
     direction LR
     class CommandsController {
         +POST routes
+        +POST routes/express
+        +POST routes/id/duplicate
         +POST routes/id/optimization
         +POST dispatch/apply
         +GET history
@@ -981,6 +999,8 @@ classDiagram
     class IRouteCommandFactory {
         <<interface>>
         +CreateRoute(request)
+        +CreateExpressRoute(request)
+        +DuplicateRoute(routeId, request)
         +ApplyOptimization(routeId)
         +ApplyDispatchPlan(request)
     }
@@ -1016,7 +1036,13 @@ classDiagram
     class IUndoableCommand~TResult~ {
         <<interface>>
     }
+    class RouteCreationCommand {
+        <<abstract>>
+        #CreateAsync()
+    }
     class CreateRouteCommand
+    class CreateExpressRouteCommand
+    class DuplicateRouteCommand
     class ApplyRouteOptimizationCommand
     class ApplyDispatchPlanCommand
     class IDeliveryRouteService {
@@ -1035,9 +1061,9 @@ classDiagram
         <<interface>>
         Memento del orden de paradas
     }
-    class IPlannedRouteCanceller {
+    class IPlannedRouteDeleter {
         <<interface>>
-        Cancela todas o ninguna
+        Elimina todas o ninguna
     }
 
     CommandsController --> ICommandInvoker
@@ -1050,24 +1076,29 @@ classDiagram
     CommandHistory o-- IUndoableAction
     ICommand <|-- IUndoableCommand
     IUndoableAction <|-- IUndoableCommand
-    IUndoableCommand <|.. CreateRouteCommand
+    IUndoableCommand <|.. RouteCreationCommand
+    RouteCreationCommand <|-- CreateRouteCommand
+    RouteCreationCommand <|-- CreateExpressRouteCommand
+    RouteCreationCommand <|-- DuplicateRouteCommand
     IUndoableCommand <|.. ApplyRouteOptimizationCommand
     IUndoableCommand <|.. ApplyDispatchPlanCommand
+    RouteCreationCommand --> IPlannedRouteDeleter
     CreateRouteCommand --> IDeliveryRouteService
-    CreateRouteCommand --> IPlannedRouteCanceller
+    CreateExpressRouteCommand --> IDeliveryRouteService
+    DuplicateRouteCommand --> IDeliveryRouteService
     ApplyRouteOptimizationCommand --> IRouteOptimizationService
     ApplyRouteOptimizationCommand --> IRouteSnapshotService
     ApplyDispatchPlanCommand --> IDispatchPlanningService
-    ApplyDispatchPlanCommand --> IPlannedRouteCanceller
+    ApplyDispatchPlanCommand --> IPlannedRouteDeleter
 ```
 
 **Qué significa deshacer y rehacer en cada orden.**
 
 | Orden | Deshacer | Rehacer | Se niega a deshacer (409) si… |
 |-------|----------|---------|-------------------------------|
-| Crear una ruta | **Cancela** la ruta. No la borra: queda en la lista como «Cancelada» y su auditoría se conserva. | Crea una ruta **nueva** con los mismos datos y con las reglas de hoy (la cancelada sigue cancelada). | la ruta ya no está planificada (ya salió, se completó o se canceló). |
-| Aplicar el orden optimizado | Restaura el orden de las paradas y la distancia y el tiempo estimados que tenía antes (la "foto"). | Vuelve a optimizar con las reglas de hoy. | la ruta ya no está planificada o sus paradas cambiaron desde entonces. |
-| Aplicar el plan de reparto | Cancela **todas** las rutas que creó, o ninguna. | Vuelve a aplicar el plan con la flota de ese momento: puede dar otro reparto o fallar con el motivo (400). | alguna de esas rutas ya no está planificada o ya no existe. |
+| Crear una ruta (formulario, «⚡ express» o «⧉ duplicar») | **Elimina** la ruta creada (al duplicar, la **copia**; la original no se toca). No la deja «Cancelada»: desaparece de la lista, así que deshacer y rehacer una y otra vez no acumulan rutas. La auditoría conserva lo que pasó. | Crea una ruta **nueva** (con otro identificador) con los mismos datos y con las reglas de hoy; al duplicar, vuelve a duplicar la ruta original, que debe seguir existiendo. | la ruta creada ya no existe o ya no está planificada (ya salió, se completó o se canceló a mano). |
+| Aplicar el orden optimizado | Restaura el orden de las paradas y la distancia y el tiempo estimados que tenía antes (la "foto"). | Vuelve a optimizar con las reglas de hoy; si la ruta ya no existe, no se puede rehacer (409). | la ruta ya no existe, ya no está planificada o sus paradas cambiaron desde entonces. |
+| Aplicar el plan de reparto | **Elimina todas** las rutas que creó, o ninguna. | Vuelve a aplicar el plan con la flota de ese momento: puede dar otro reparto o fallar con el motivo (400). | alguna de esas rutas ya no está planificada o ya no existe. |
 
 **Reglas del historial.**
 
@@ -1076,31 +1107,40 @@ classDiagram
 - Una orden que falla (regla de asignación incumplida, ruta inexistente…) **no queda** en el historial, y una que no cambió
   nada (por ejemplo, optimizar una ruta que ya está en su mejor orden) tampoco.
 - Una operación nueva descarta lo que se había deshecho: ya no se puede rehacer (como en un editor de texto).
-- Si deshacer ya no es posible, la API responde **409** con el motivo y **quita esa operación del historial**, para que no
-  bloquee a las anteriores. Una falla pasajera (que no es un cambio de estado) la deja para reintentar.
+- Si deshacer **o rehacer** ya no es posible porque lo que la operación necesita cambió o ya no existe (la ruta salió, o se eliminó
+  al deshacer su creación), la API responde **409** con el motivo y **quita esa operación del historial**, para que no bloquee a las
+  anteriores ni deje un botón atascado. Una falla pasajera (que no es un cambio de estado, por ejemplo una regla de asignación que hoy
+  no se cumple) la deja para reintentar.
+- Una ruta eliminada **no se recupera**: rehacer su creación no la devuelve, crea otra ruta con los mismos datos y otro identificador.
+  Por eso, si una operación posterior actuaba sobre la ruta eliminada (por ejemplo, optimizarla), esa operación ya no se puede rehacer.
 - Dos peticiones del mismo usuario a la vez (dos «deshacer» seguidos) se atienden una tras otra: no pueden deshacer lo mismo dos veces.
-- Todo queda en la bitácora con el usuario, en la categoría «Comando» (*Ejecutó / Deshizo / Rehízo / No se pudo deshacer*).
+- Todo queda en la bitácora con el usuario, en la categoría «Comando» (*Ejecutó / Deshizo / Rehízo / No se pudo deshacer / No se pudo rehacer*); la ruta eliminada deja además «Ruta 'X' eliminada al deshacer su creación» en la categoría «Ruta».
 
 **Endpoints** (todos solo para administradores: 401 sin sesión y 403 con un operador):
 
 | Método | Ruta | Qué hace | Respuestas |
 |--------|------|----------|------------|
 | POST | `/api/commands/routes` | Igual que `POST /api/routes` y deja la operación en el historial. | 201 con la ruta (`Location` hacia `GET /api/routes/{id}`) · 400 reglas de asignación o datos inválidos |
+| POST | `/api/commands/routes/express` | Igual que `POST /api/routes/express` y deja la operación en el historial. | 201 con la ruta (`Location` hacia `GET /api/routes/{id}`) · 400 reglas de asignación o datos inválidos |
+| POST | `/api/commands/routes/{id}/duplicate` | Igual que `POST /api/routes/{id}/duplicate` y deja la operación en el historial. | 201 con la copia (`Location` hacia `GET /api/routes/{id}`) · 404 ruta inexistente |
 | POST | `/api/commands/routes/{id}/optimization` | Igual que `POST /api/routes/{id}/optimization`. | 200 · 404 ruta inexistente · 400 ya no está planificada |
 | POST | `/api/commands/dispatch/apply` | Igual que `POST /api/dispatch/apply`. | 200 · 400 datos inválidos o nada que asignar |
 | GET | `/api/commands/history` | `{ "undoable": [...], "redoable": [...] }`, de lo más reciente a lo más antiguo, cada una con `description` y `executedAt`. | 200 |
-| POST | `/api/commands/undo` | Deshace la última operación del usuario. | 200 `{ "description", "history" }` · 400 nada que deshacer · 409 ya no se puede |
-| POST | `/api/commands/redo` | Rehace la última operación deshecha. | 200 · 400 nada que rehacer |
+| POST | `/api/commands/undo` | Deshace la última operación del usuario (crear una ruta la elimina). | 200 `{ "description", "history" }` · 400 nada que deshacer · 409 ya no se puede |
+| POST | `/api/commands/redo` | Rehace la última operación deshecha. | 200 · 400 nada que rehacer · 409 ya no se puede (y se quita del historial) |
 
 En el panel, los botones **«↶ Deshacer»** y **«↷ Rehacer»** de la pestaña *Rutas y cargas* están apagados cuando no hay nada que
-deshacer o rehacer; al pasar el cursor muestran qué operación se va a deshacer o rehacer.
+deshacer o rehacer; al pasar el cursor muestran qué operación se va a deshacer o rehacer. Si el historial no se puede leer (por
+ejemplo, porque la API que está corriendo es una versión anterior y no tiene `/api/commands/history`), los botones también
+quedan apagados, pero el texto de ayuda lo dice —«No se pudo leer el historial (Error 404)…»— y se deja un aviso en la consola
+del navegador: no se confunde con «todavía no hay nada que deshacer».
 
 **Cómo cumple SOLID y qué se evitó.**
 
 | Principio | En este patrón |
 |-----------|----------------|
-| **S** | Cada pieza tiene un solo motivo de cambio: la orden sabe su operación, el invocador ejecuta y anota, el historial guarda, la fábrica arma, el cancelador cancela, el controlador traduce HTTP. |
-| **O** | Una operación nueva que se pueda deshacer es **una clase nueva** (`IUndoableCommand<T>`), un método en la fábrica y un endpoint; el invocador y el historial no cambian (una prueba comprueba que no conocen ninguna orden concreta). |
+| **S** | Cada pieza tiene un solo motivo de cambio: la orden sabe su operación, el invocador ejecuta y anota, el historial guarda, la fábrica arma, el eliminador elimina, el controlador traduce HTTP. |
+| **O** | Una operación nueva que se pueda deshacer es **una clase nueva** (`IUndoableCommand<T>`), un método en la fábrica y un endpoint; el invocador y el historial no cambian (una prueba comprueba que no conocen ninguna orden concreta). Un camino nuevo para crear rutas es una subclase pequeña de `RouteCreationCommand` (cómo crear y cómo describir), sin tocar la base. |
 | **L** | El invocador funciona con cualquier `IUndoableCommand<T>`: sus pruebas usan órdenes de mentira que no tocan rutas ni vehículos. |
 | **I** | `ICommand<T>` (ejecutar) y `IUndoableAction` (lo que pide el historial) son interfaces pequeñas y separadas; el historial no necesita saber el tipo del resultado. |
 | **D** | Las órdenes dependen de interfaces de servicios, nunca de repositorios ni de clases concretas (una prueba de arquitectura lo vigila); el almacén de historiales es una interfaz y `Program.cs` es el único que elige la implementación. |
@@ -1109,15 +1149,16 @@ Smells evitados a propósito: ningún `switch` ni `if (orden is X)` en el invoca
 repetida (las órdenes reutilizan los servicios existentes, así que las reglas de asignación del Decorator de la
 [sección 8.12](#812-decorator--reglas-de-asignación-sobre-el-servicio-de-rutas) y la estrategia de la
 [sección 8.11](#811-strategy--optimizar-paradas-y-repartir-cargas) se aplican igual al crear, al rehacer y al planificar); ningún
-estado compartido entre usuarios; y sin cambiar la interfaz del repositorio (por eso deshacer **cancela** en vez de borrar).
+estado compartido entre usuarios; lo que comparten las tres órdenes que crean rutas (recordar cuál crearon, deshacer y rehacer) se escribió una sola vez en `RouteCreationCommand` en lugar de copiarlo tres veces; y deshacer **elimina** de verdad la ruta creada en vez de dejarla «Cancelada» (para eso el repositorio de rutas ganó un `DeleteAsync`, como el de vehículos): una ruta cancelada se acumulaba cada vez que se deshacía y se rehacía.
 
 **Qué no se tocó.** Singleton, Factory Method, Abstract Factory, Builder + Director, Prototype, Adapter, Bridge, Composite,
 los Decorators, el Facade, el Flyweight, el Proxy y Strategy siguen exactamente como estaban. Las órdenes llaman al
 `IDeliveryRouteService` protegido por el Decorator y reutilizan el Builder y las estrategias a través de los servicios
-existentes. Los dos únicos cambios en código existente, por si se quieren revisar: (1) `DeliveryRouteService` ya no libera a un vehículo
-al cancelar o completar una ruta si ese vehículo sigue ocupado en **otra** ruta activa (un defecto que ya existía y que deshacer
-habría vuelto visible), y (2) el texto del estado de la ruta, que antes era un método privado de `RouteOptimizationService`, pasó
-a `RouteStatusText` para que lo compartan sin cambiar ningún mensaje.
+existentes. Los tres únicos cambios en código existente, por si se quieren revisar: (1) `DeliveryRouteService` ya no libera a un vehículo
+al cancelar o completar una ruta si ese vehículo sigue ocupado en **otra** ruta activa (un defecto que ya existía), (2) el texto del
+estado de la ruta, que antes era un método privado de `RouteOptimizationService`, pasó a `RouteStatusText` para que lo compartan sin
+cambiar ningún mensaje, y (3) `IDeliveryRouteRepository` y su implementación en memoria ganaron `DeleteAsync` (solo lo usa «Deshacer»;
+no hay ningún endpoint para borrar rutas; por eso el repositorio de rutas de prueba de `Simulation/SimulationFakes.cs` ganó la línea que lo implementa).
 
 ### 8.14 Chain of Responsibility — de la alerta reportada a quien debe atenderla
 
@@ -1296,6 +1337,319 @@ respondiendo 400 con el aviso estándar de ASP.NET, una ruta inexistente respond
 se guarda como 0. Además, las alertas graves y críticas generan un aviso adicional (visible en la consola del backend y en
 `GET /api/audit/logs`).
 
+### 8.15 Iterator — recorrer la carga de una ruta sin conocer su estructura
+
+La carga de una ruta es un árbol (el **Composite** de la [sección 8.7](#87-patrones-estructurales-adapter-bridge-composite-y-decorator)): la
+ruta contiene grupos «Prioridad X» y cada grupo contiene artículos. Quien necesita **los artículos uno por uno** —por ejemplo, para
+mostrarlos en una lista plana— no debería tener que saber cuántos niveles tiene el árbol ni cómo guarda sus hijos. Para eso está el
+**Iterator**: el cliente solo pregunta `HasNext()` y pide `Next()`.
+
+**Qué ya existía y qué se agregó.** El método `Traverse()` de `CargoComponentExtensions` ya recorría el árbol en profundidad con
+`yield return`. Es un iterador *interno* (la propia colección entrega los elementos) y sigue exactamente igual: lo usa `CargoGroup.Add`
+para impedir ciclos. Lo que no había era el patrón de forma explícita: un objeto que lleve el estado del recorrido y que el cliente
+maneje a su ritmo (un iterador *externo*). Eso es lo nuevo, y está en el mismo módulo del Composite (`Domain/Cargo/`).
+
+| Participante | Clase | Qué hace |
+|--------------|-------|----------|
+| **Iterator** | `ICargoIterator` | El contrato: `HasNext()` (no consume nada) y `Next()` (entrega el siguiente y avanza; si ya no queda nada lanza `InvalidOperationException`). |
+| **Concrete Iterator** | `CargoDepthFirstIterator` | Recorre en profundidad (pre-orden) con una pila propia, sin recursión. Entrega cada componente **una sola vez** y acepta un filtro opcional que no cambia el orden. |
+| **Aggregate** | `ICargoComponent` (`CargoGroup`, `CargoItemComponent`) | El Composite de siempre: **no cambió**. |
+| **CreateIterator** | `CargoIteratorExtensions` (`CreateIterator()`, `CreateItemIterator()`) | Métodos de extensión: para pedir un iterador no hace falta tocar el Composite. |
+| **Client** | `CargoManifestService.GetCargoItemsAsync` | Obtiene la lista plana de artículos de una ruta pidiendo «el siguiente», sin saber cuántos niveles hay. |
+
+```mermaid
+classDiagram
+    direction LR
+    class ICargoIterator {
+        <<interface>>
+        +HasNext() bool
+        +Next() ICargoComponent
+    }
+    class CargoDepthFirstIterator {
+        -Stack pending
+        -HashSet visited
+        -Func accepts
+    }
+    class ICargoComponent {
+        <<interface>>
+        Composite sin cambios
+    }
+    class CargoGroup
+    class CargoItemComponent
+    class CargoIteratorExtensions {
+        <<static>>
+        +CreateIterator(root) ICargoIterator
+        +CreateItemIterator(root) ICargoIterator
+    }
+    class CargoManifestService {
+        +GetManifestAsync(routeId)
+        +GetCargoItemsAsync(routeId)
+    }
+    ICargoIterator <|.. CargoDepthFirstIterator
+    ICargoComponent <|.. CargoGroup
+    ICargoComponent <|.. CargoItemComponent
+    CargoGroup o-- ICargoComponent : hijos
+    CargoDepthFirstIterator ..> ICargoComponent : lee Children
+    CargoIteratorExtensions ..> CargoDepthFirstIterator : crea
+    CargoManifestService ..> CargoIteratorExtensions : pide el iterador
+    CargoManifestService ..> ICargoIterator : HasNext y Next
+```
+
+**Qué cumple.**
+
+- **Profundidad y orden:** entrega los componentes en el mismo orden que `Traverse()` (una prueba los compara en árboles anidados).
+- **Grupos y artículos:** `CreateIterator()` entrega todo; `CreateItemIterator()` solo los artículos. Un artículo es un componente sin hijos
+  que cuenta como carga, así que un grupo vacío no se confunde con uno.
+- **Sin duplicados:** un mismo componente agregado a dos grupos se entrega una vez, y una implementación propia de `ICargoComponent` que
+  formara un ciclo no deja el recorrido en un bucle infinito (`CargoGroup.Add` ya impide los ciclos; esto es una segunda defensa).
+  Dos artículos *distintos* con el mismo nombre sí se entregan los dos.
+- **Estructuras vacías:** un grupo sin hijos entrega solo a sí mismo; con el filtro de artículos no entrega nada; `HasNext()` es `false`.
+- **Sin recursión:** un árbol de miles de niveles no desborda la pila de llamadas.
+- **No modifica nada:** solo **lee** `Children`.
+
+**Dónde se usa: la lista plana de una ruta.** El manifiesto jerárquico (`GET /api/routes/{id}/cargo-manifest`) sigue igual. Se agregó un
+endpoint **adicional** con los mismos artículos como lista plana, en el orden del recorrido en profundidad del manifiesto:
+
+```
+GET /api/routes/{id}/cargo-items
+{
+  "routeId": "…", "itemCount": 6, "totalWeightKg": 70.75, "totalVolumeM3": 1.08,
+  "items": [
+    { "position": 1, "description": "Cajas estándar A", "weightKg": 30,  "volumeM3": 0.5,  "priority": "Standard" },
+    { "position": 2, "description": "Cajas estándar C", "weightKg": 5,   "volumeM3": 0.05, "priority": "Standard" },
+    { "position": 3, "description": "Repuestos alta",   "weightKg": 20,  "volumeM3": 0.2,  "priority": "High" },
+    { "position": 4, "description": "Documento urgente", "weightKg": 1,  "volumeM3": 0.01, "priority": "Urgent" },
+    …
+  ]
+}
+```
+
+Una ruta sin carga responde 200 con la lista vacía y los totales en cero; una ruta inexistente, 404 con `{ "message": "Ruta no encontrada." }`
+(igual que el manifiesto). `position` es el lugar del artículo en el recorrido, empezando en 1; `priority` es la del artículo (en el
+manifiesto jerárquico se deduce del grupo que lo contiene); los pesos y volúmenes se redondean a 3 decimales como allí. El frontend no
+cambió: no consume este endpoint.
+
+**Convive con lo anterior sin tocarlo.** El Composite (`ICargoComponent`, `CargoGroup`, `CargoItemComponent`, `CargoManifest`,
+`CargoComponentExtensions`) conserva su código: el Iterator solo se apoya en su contrato. `CargoManifestService` conserva
+`GetManifestAsync` y agrega un método; `ICargoManifestService` agrega esa firma (no hay otras implementaciones ni dobles de esa interfaz).
+Ningún DTO ni endpoint existente cambió.
+
+### 8.16 Mediator — coordinar el estado de la ruta con el del vehículo
+
+Cuando una ruta cambia de estado, su vehículo debe acompañarla: al salir queda «En ruta» y al terminar queda «Disponible» (si no sigue
+ocupado en otro viaje). Esa coordinación estaba escrita dentro de `DeliveryRouteService.UpdateRouteStatusAsync`, que además de cambiar la
+ruta tocaba directamente al vehículo, y `TripAlertService` cambiaba la ruta por su cuenta al registrar un retraso. El **Mediator** reúne esa
+coordinación en un solo lugar: quien cambia la ruta no conoce al vehículo, quien cambia al vehículo no conoce la ruta, y se hablan a través
+del mediador. Las reglas son **exactamente las de antes**; lo que cambió es quién las aplica.
+
+| Rol | Clase | Responsabilidad |
+|-----|-------|-----------------|
+| **Mediator** | `IFleetLifecycleMediator` | El contrato: dos avisos, «la ruta cambió de estado» y «la ruta quedó retrasada por una alerta». |
+| **Concrete Mediator** | `FleetLifecycleMediator` | Las reglas que relacionan el estado de la ruta con el del vehículo (tabla de abajo). Depende solo de `IVehicleColleague`. |
+| **Colleague de rutas** | `IRouteColleague` / `RouteColleague` | Es dueño del estado de la ruta: lo guarda y se lo comunica al mediador. También responde a la pregunta «¿ese vehículo sigue en otro viaje activo?». No conoce al participante de vehículos. |
+| **Colleague de vehículos** | `IVehicleColleague` / `VehicleColleague` | Es dueño de la disponibilidad del vehículo: lo deja «En ruta» o lo libera si corresponde. No conoce al participante de rutas ni al mediador. |
+| **Quienes inician** | `DeliveryRouteService`, `TripAlertService` | Validan la petición, piden el cambio al participante de rutas y siguen auditando y notificando como antes. Ya no tocan al vehículo ni se conocen entre sí. |
+
+```mermaid
+classDiagram
+    direction LR
+    class IFleetLifecycleMediator {
+        <<interface>>
+        +RouteStatusChangedAsync(sender, route)
+        +RouteDelayReportedAsync(sender, route)
+    }
+    class FleetLifecycleMediator
+    class IRouteColleague {
+        <<interface>>
+        +ChangeStatusAsync(route, newStatus)
+        +ReportDelayAsync(route, delayMinutes)
+        +HasOtherActiveTripAsync(vehicleId, exceptRouteId)
+    }
+    class RouteColleague
+    class IVehicleColleague {
+        <<interface>>
+        +MarkEnRouteAsync(vehicleId)
+        +ReleaseAfterTripAsync(vehicleId, hasOtherActiveTrip)
+    }
+    class VehicleColleague
+    class DeliveryRouteService
+    class TripAlertService
+    class IDeliveryRouteRepository {
+        <<interface>>
+    }
+    class IVehicleRepository {
+        <<interface>>
+    }
+    IFleetLifecycleMediator <|.. FleetLifecycleMediator
+    IRouteColleague <|.. RouteColleague
+    IVehicleColleague <|.. VehicleColleague
+    DeliveryRouteService --> IRouteColleague : cambia el estado
+    TripAlertService --> IRouteColleague : reporta el retraso
+    RouteColleague --> IFleetLifecycleMediator : avisa
+    FleetLifecycleMediator --> IVehicleColleague : le ordena
+    FleetLifecycleMediator ..> IRouteColleague : le pregunta (llega en cada aviso)
+    RouteColleague --> IDeliveryRouteRepository
+    VehicleColleague --> IVehicleRepository
+```
+
+**Qué pasa con el vehículo** (las cuatro reglas de negocio de siempre):
+
+| La ruta pasa a… | El vehículo asignado… |
+|-----------------|-----------------------|
+| **En progreso** o **Retrasada** | queda **En ruta** (regla 1). |
+| **Completada** o **Cancelada** | queda **Disponible** solo si iba En ruta **y** ninguna *otra* ruta suya está En progreso o Retrasada (regla 2). Uno en **Mantenimiento** o **Fuera de servicio** conserva su estado: terminar una ruta no lo repara (regla 3). |
+| **Planificada** | no cambia. |
+| (sin vehículo asignado, o el vehículo ya no existe) | no hay nada que coordinar: la ruta cambia igual y no se produce ningún error (regla 4). |
+
+```mermaid
+sequenceDiagram
+    participant API as PATCH status
+    participant S as DeliveryRouteService
+    participant R as RouteColleague
+    participant M as FleetLifecycleMediator
+    participant V as VehicleColleague
+    API->>S: UpdateRouteStatusAsync(id, Completed)
+    S->>S: valida que la ruta existe y que el estado es válido
+    S->>R: ChangeStatusAsync(route, Completed)
+    R->>R: guarda la ruta
+    R->>M: RouteStatusChangedAsync(this, route)
+    M->>R: HasOtherActiveTripAsync(vehicleId, route.Id)
+    R-->>M: false
+    M->>V: ReleaseAfterTripAsync(vehicleId, false)
+    V->>V: EnRoute pasa a Available (los demás estados se conservan)
+    S->>S: audita «Ruta cambió su estado a Completed»
+```
+
+**Cómo es una comunicación real y no una fachada.** El participante de rutas inicia la conversación (avisa al mediador); el mediador le
+*pregunta* algo al participante que avisó (¿sigue en otro viaje?) y con la respuesta *ordena* al de vehículos; los dos participantes nunca
+se hablan. Si mañana hubiera un tercer participante (por ejemplo, el conductor), solo se agregaría al mediador.
+
+**Lo que no cambió.**
+
+- **Auditoría:** cada cambio de estado deja la **misma línea de siempre**, una sola vez («Ruta '…' cambió su estado a …»), la escribe
+  `DeliveryRouteService` y el mediador no agrega ninguna propia ni ningún aviso.
+- **Errores:** ruta inexistente (404, «Ruta no encontrada.») y estado inválido (400) se rechazan antes de que el mediador intervenga.
+- **Decorator de reglas de asignación** ([8.12](#812-decorator--reglas-de-asignación-sobre-el-servicio-de-rutas)): sigue envolviendo a
+  `DeliveryRouteService` y validando antes de iniciar un viaje.
+- **Chain of Responsibility, Bridge y Decorators de avisos** ([8.14](#814-chain-of-responsibility--de-la-alerta-reportada-a-quien-debe-atenderla)):
+  la cadena sigue procesando la alerta y `TripAlertService` sigue enviando su aviso por el mismo puente y los mismos decoradores.
+- **Facade del dashboard:** solo lee; su resumen refleja lo que el mediador dejó en la flota.
+
+**Decisión conservada: el retraso que reporta una alerta.** `TripAlertService` siempre marcó la ruta como Retrasada y sumó los minutos
+**sin tocar al vehículo ni auditar un cambio de estado**, y así sigue (ahora a través de `RouteColleague.ReportDelayAsync`, que se lo
+comunica al mediador con `RouteDelayReportedAsync`; este, a propósito, no hace nada con el vehículo). Es distinto de pedir el estado
+`Delayed` por la API, que sí deja al vehículo En ruta. Es una diferencia que **ya existía**; se conservó para no cambiar efectos
+secundarios, y una prueba la fija. Si se decide que la regla 1 también debe aplicar a las alertas, el cambio es una línea en
+`FleetLifecycleMediator.RouteDelayReportedAsync` (llamar a `_vehicles.MarkEnRouteAsync`) y ajustar esa prueba.
+
+**Qué servicios no son participantes, y por qué.** `VehicleService` (cambio manual del estado de un vehículo) y `MaintenanceService`
+(registrar un mantenimiento) se revisaron: no coordinan nada con las rutas, así que meterlos en el mediador sería una abstracción
+innecesaria. El participante de vehículos tampoco usa `IVehicleService` a propósito: ese servicio audita y notifica cada cambio, y el
+ajuste automático por el ciclo de la ruta nunca lo hizo.
+
+**Registro en `Program.cs`** (por petición, como los servicios que los usan; sin referencias circulares:
+servicios → participante de rutas → mediador → participante de vehículos → repositorio):
+
+```csharp
+builder.Services.AddScoped<IVehicleColleague, VehicleColleague>();
+builder.Services.AddScoped<IFleetLifecycleMediator, FleetLifecycleMediator>();
+builder.Services.AddScoped<IRouteColleague, RouteColleague>();
+```
+
+`DeliveryRouteService` y `TripAlertService` reciben un parámetro nuevo, `IRouteColleague`; las pruebas que los construyen a mano lo arman con
+`Support/FleetMediators.cs` (10 archivos de prueba y de apoyo solo cambiaron esa línea). No se instaló ningún paquete NuGet (ni MediatR).
+
+### 8.17 Memento — volver al orden anterior de las paradas
+
+Optimizar una ruta reordena sus paradas y cambia la distancia y el tiempo estimados. Para poder **deshacerlo** hace falta recordar cómo
+estaba la ruta antes, sin que quien guarda ese recuerdo tenga que conocer sus detalles ni pueda alterarlo. Eso es el **Memento**. Ya existía
+en el proyecto como parte del Command ([8.13](#813-command--deshacer-y-rehacer-operaciones-de-rutas)); en esta versión se revisó, se
+fortaleció y se documenta como patrón independiente. **No se creó otro sistema de recuerdos.**
+
+| Rol | Clase | Responsabilidad |
+|-----|-------|-----------------|
+| **Originator** | `RouteSnapshotService` (`IRouteSnapshotService`) | Crea el recuerdo (`CaptureAsync`) y es el único que sabe restaurarlo (`RestoreStopOrderAsync`). Es un servicio y no la entidad `DeliveryRoute` para no agregarle comportamiento de deshacer ni exponer sus paradas. |
+| **Memento** (interfaz ancha) | `RouteSnapshot` | La foto: la posición de cada parada (`WaypointPosition`: id de la parada y su orden) y la distancia y el tiempo estimados. Nada más. |
+| **Memento** (interfaz estrecha) | `IRouteMemento` | Lo único que ve quien solo lo guarda: de qué ruta es (`RouteId`, `RouteName`). |
+| **Caretaker** | `ApplyRouteOptimizationCommand` | Guarda el recuerdo en un campo `IRouteMemento` y se lo devuelve al Originator al deshacer; no lo abre, no lo modifica y no sabe reconstruir nada. |
+
+```mermaid
+classDiagram
+    direction LR
+    class ApplyRouteOptimizationCommand {
+        -IRouteMemento before
+        +ExecuteAsync()
+        +UndoAsync()
+        +RedoAsync()
+    }
+    class IRouteMemento {
+        <<interface>>
+        +RouteId Guid
+        +RouteName string
+    }
+    class RouteSnapshot {
+        <<sealed>>
+        +Stops IReadOnlyList
+        +EstimatedDistanceKm double
+        +EstimatedDurationMinutes double
+    }
+    class WaypointPosition {
+        <<record>>
+        +WaypointId Guid
+        +Order int
+    }
+    class IRouteSnapshotService {
+        <<interface>>
+        +CaptureAsync(routeId) RouteSnapshot
+        +RestoreStopOrderAsync(memento)
+    }
+    class RouteSnapshotService
+    class CommandInvoker
+    IRouteMemento <|.. RouteSnapshot
+    RouteSnapshot *-- WaypointPosition
+    IRouteSnapshotService <|.. RouteSnapshotService
+    RouteSnapshotService ..> RouteSnapshot : crea y lee
+    ApplyRouteOptimizationCommand --> IRouteMemento : solo lo guarda
+    ApplyRouteOptimizationCommand --> IRouteSnapshotService : captura y restaura
+    CommandInvoker --> ApplyRouteOptimizationCommand : historial de deshacer y rehacer
+```
+
+**Cómo se cumple cada requisito.**
+
+| Requisito | Cómo |
+|-----------|------|
+| Estado anterior de las paradas | `Stops`: una `WaypointPosition(WaypointId, Order)` por parada. Se identifican por id y no por etiqueta (las etiquetas pueden repetirse). |
+| Distancia y duración | `EstimatedDistanceKm` y `EstimatedDurationMinutes`; vuelven exactas. |
+| Captura independiente de cambios posteriores | El recuerdo copia valores: las posiciones son inmutables, la lista es una copia propia de solo lectura (no se puede convertir en una lista modificable) y no guarda la entidad ni referencias a ella. |
+| Restaurar cuando se puede | Solo si la ruta sigue **planificada** y con **las mismas paradas**: reasigna el orden, reordena la lista, restaura las estimaciones y guarda. |
+| Rechazar cuando ya no cumple | `CommandNotUndoableException` (la API responde **409**) si la ruta ya no existe, ya salió o cambió de paradas; se verifica **antes** de cambiar nada (todo o nada). `ArgumentException` si el recuerdo no lo creó este servicio y `ArgumentNullException` si es nulo. |
+| Compatible con Deshacer y Rehacer | Cada ejecución (también «rehacer») toma un recuerdo nuevo, así que deshacer vuelve siempre al estado inmediatamente anterior a esa ejecución, también tras varias vueltas. Si no se puede restaurar, el invocador quita la orden del historial. |
+| Sin información innecesaria | No guarda la entidad, coordenadas, etiquetas, carga ni el estado de la ruta: solo lo que cambia al optimizar. |
+
+**Qué se fortaleció en esta versión** (el diseño ya era correcto; se cerraron los huecos de encapsulamiento):
+
+- **`IRouteMemento` (nueva):** la interfaz estrecha. `ApplyRouteOptimizationCommand` declara con ella su campo y sus variables, así que ya
+  no puede leer las paradas ni las estimaciones; `IRouteSnapshotService.RestoreStopOrderAsync` recibe un `IRouteMemento`.
+- **`RouteSnapshot`:** pasó de `record` a clase sellada con constructor **`internal`**: nadie fuera de la capa puede fabricar un recuerdo
+  con datos a medida ni copiarlo con cambios (`with`), y no tiene setters.
+- **`RouteSnapshotService`:** rechaza un recuerdo que no creó y uno nulo, sin tocar la ruta.
+- **Pruebas:** la carpeta `Memento/` (35) lo demuestra como patrón independiente y junto con Command; incluye pruebas de arquitectura que
+  vigilan que el Caretaker solo lo vea por la interfaz estrecha.
+
+**Qué no cambió.** `CaptureAsync` sigue devolviendo `RouteSnapshot`; los endpoints de Command y sus respuestas son los mismos (deshacer una
+optimización de una ruta que ya salió sigue respondiendo 409 con el motivo); las pruebas anteriores de `RouteSnapshotServiceTests`,
+`RouteCommandsTests` y `CommandInvokerTests` no se modificaron.
+
+**Cómo se ve por la API** (con la API en marcha y la sesión de un administrador; el historial es por usuario):
+
+```bash
+# crear una ruta con paradas A, B, C por Command, optimizarla, deshacer y rehacer
+POST /api/commands/routes                       → ruta con paradas A→B→C · 155.67 km · 169.8 min
+POST /api/commands/routes/{id}/optimization     → paradas B→C→A · 66.72 km · 72.8 min      (el Caretaker guarda el recuerdo)
+POST /api/commands/undo                         → paradas A→B→C · 155.67 km · 169.8 min    (el Originator lo restaura)
+POST /api/commands/redo                         → paradas B→C→A · 66.72 km · 72.8 min
+```
+
 ---
 
 ## 9. Documentación de la API REST
@@ -1319,20 +1673,23 @@ correr el backend. Resumen de endpoints:
 | GET | `/api/routes/{id}` | Detalle de una ruta | — |
 | GET | `/api/routes/driver/{driverId}` | Rutas asignadas a un conductor | — |
 | GET | `/api/routes/{id}/cargo-manifest` | Manifiesto jerárquico de la carga de una ruta (Composite) | — |
+| GET | `/api/routes/{id}/cargo-items` | Los mismos artículos como lista plana, en el orden del recorrido en profundidad del manifiesto (Iterator, [8.15](#815-iterator--recorrer-la-carga-de-una-ruta-sin-conocer-su-estructura)). 404 si la ruta no existe | — |
 | POST | `/api/routes` | Crea una ruta (Builder). Responde 400 si la carga excede la capacidad del vehículo, si este no está operativo o tiene mantenimiento vencido ([8.12](#812-decorator--reglas-de-asignación-sobre-el-servicio-de-rutas)) | Admin |
 | POST | `/api/routes/express` | Crea una ruta express (Builder + Director). Mismas reglas de asignación que `POST /api/routes` | Admin |
 | POST | `/api/routes/{id}/duplicate` | Duplica una ruta (Prototype) | Admin |
-| PATCH | `/api/routes/{id}/status` | Cambia el estado de una ruta. Al iniciarla (`InProgress`/`Delayed`) responde 400 si el vehículo o el conductor ya están en otro viaje activo o el vehículo no está operativo | — |
+| PATCH | `/api/routes/{id}/status` | Cambia el estado de una ruta. Al iniciarla (`InProgress`/`Delayed`) responde 400 si el vehículo o el conductor ya están en otro viaje activo o el vehículo no está operativo. Después de guardar el estado, el vehículo asignado se ajusta (queda En ruta, o Disponible al terminar si no sigue en otro viaje; Mediator, [8.16](#816-mediator--coordinar-el-estado-de-la-ruta-con-el-del-vehículo)) | — |
 | GET | `/api/routes/{id}/optimization` | Propone un mejor orden de las paradas **sin modificar la ruta**: lista actual y propuesta, kilómetros y minutos de cada una, ahorro (Strategy) | — |
 | POST | `/api/routes/{id}/optimization` | Aplica el orden propuesto (solo rutas planificadas; 400 si no lo está; si ya es el mejor, no cambia nada) | Admin |
 | POST | `/api/dispatch/plan` | Calcula, **sin guardar nada**, el reparto de una lista de entregas entre los vehículos disponibles: viajes con sus paradas en orden, carga, kilómetros y minutos; entregas sin asignar con su motivo; vehículos excluidos con su motivo; comparación con el reparto simple (Strategy) | Admin |
 | POST | `/api/dispatch/apply` | Recalcula el plan y crea una ruta **planificada** por viaje (todo o nada) | Admin |
 | POST | `/api/commands/routes` | Igual que `POST /api/routes`, pero la operación queda en el historial del usuario y se puede deshacer ([8.13](#813-command--deshacer-y-rehacer-operaciones-de-rutas)) | Admin |
+| POST | `/api/commands/routes/express` | Igual que `POST /api/routes/express`, con historial | Admin |
+| POST | `/api/commands/routes/{id}/duplicate` | Igual que `POST /api/routes/{id}/duplicate`, con historial | Admin |
 | POST | `/api/commands/routes/{id}/optimization` | Igual que `POST /api/routes/{id}/optimization`, con historial | Admin |
 | POST | `/api/commands/dispatch/apply` | Igual que `POST /api/dispatch/apply`, con historial | Admin |
 | GET | `/api/commands/history` | Lo que el usuario puede deshacer y rehacer, de lo más reciente a lo más antiguo | Admin |
-| POST | `/api/commands/undo` | Deshace la última operación del usuario (cancela la ruta creada o restaura el orden de las paradas). 400 si no hay nada que deshacer; 409 si ya no se puede | Admin |
-| POST | `/api/commands/redo` | Rehace la última operación deshecha (crea rutas nuevas con las reglas de hoy). 400 si no hay nada que rehacer | Admin |
+| POST | `/api/commands/undo` | Deshace la última operación del usuario (elimina la ruta creada o restaura el orden de las paradas). 400 si no hay nada que deshacer; 409 si ya no se puede | Admin |
+| POST | `/api/commands/redo` | Rehace la última operación deshecha (crea rutas nuevas con las reglas de hoy). 400 si no hay nada que rehacer; 409 si ya no se puede (la ruta sobre la que actuaba ya no existe) | Admin |
 | GET | `/api/maintenance` | Historial de mantenimiento | — |
 | GET | `/api/maintenance/vehicle/{vehicleId}` | Historial de un vehículo | — |
 | GET | `/api/maintenance/due` | Vehículos con mantenimiento vencido (predictivo) | — |
@@ -1444,7 +1801,7 @@ para mantenerlo simple, y quedan documentadas aquí para quien continúe el proy
   de `NetTopologySuite` (`Point`) y de Swashbuckle, y las pruebas se ejecutaron con un ejecutor mínimo compatible con xUnit
   (solo para esa verificación, no forma parte del proyecto). La API se levantó y se probó por HTTP, y el frontend se probó en
   un navegador sin interfaz (Chromium) con los mosaicos del mapa simulados. Al recibirlo, ejecute `dotnet build` y
-  `dotnet test` (esperado: **800** pruebas superadas, [sección 12](#12-pruebas-automatizadas-y-cómo-demostrar-el-factory-method))
+  `dotnet test` (esperado: **1013** pruebas superadas, [sección 12](#12-pruebas-automatizadas-y-cómo-demostrar-el-factory-method))
   y avise de cualquier diferencia. El frontend no tiene pruebas automatizadas dentro del proyecto.
 - El cálculo de "próximo mantenimiento vencido" compara la fecha/kilometraje
   registrados manualmente en cada `MaintenanceRecord`; no hay integración con
@@ -1466,13 +1823,15 @@ para mantenerlo simple, y quedan documentadas aquí para quien continúe el proy
   comprueba al crear la ruta y las reglas de disponibilidad también al iniciarla; duplicar una ruta no repite la
   comprobación al crear la copia. El estado "vencido" del mantenimiento sale del módulo predictivo actual (fecha o kilometraje
   registrados a mano).
-- **Deshacer y rehacer** ([8.13](#813-command--deshacer-y-rehacer-operaciones-de-rutas)): solo cubre tres operaciones (crear una
-  ruta desde «+ Nueva ruta», aplicar el orden optimizado y aplicar el plan de reparto); «⚡ Ruta express», duplicar, cambiar el
-  estado y los endpoints anteriores no dejan historial. Deshacer **cancela** las rutas (no las borra) y solo se permite mientras
-  siguen planificadas; la comprobación y la cancelación no son una operación atómica entre usuarios (si otra persona inicia una
-  de esas rutas justo en medio, puede quedar cancelada una ruta que ya salió). Rehacer no recupera lo deshecho: vuelve a ejecutar
-  la operación con los datos y las reglas de hoy y **crea rutas nuevas**; si una regla ya no se cumple falla con su motivo y la
-  operación sigue disponible para rehacer. El historial es **por nombre de usuario**, vive en memoria, guarda las 20 operaciones
+- **Deshacer y rehacer** ([8.13](#813-command--deshacer-y-rehacer-operaciones-de-rutas)): solo cubre las operaciones de rutas
+  de esa sección (crear una ruta por el formulario, «⚡ Ruta express» o «⧉ Duplicar», aplicar el orden optimizado y aplicar el
+  plan de reparto); cambiar el estado de una ruta, el resto de las pantallas (vehículos, mantenimiento, alertas) y los endpoints
+  anteriores no dejan historial. Deshacer **elimina** las rutas que la operación creó (no las deja canceladas) y solo se permite
+  mientras siguen planificadas; la comprobación y la eliminación no son una operación atómica entre usuarios (si otra persona
+  inicia una de esas rutas justo en medio, podría eliminarse una ruta que ya salió). Una ruta eliminada no se recupera: rehacer no
+  la devuelve, vuelve a ejecutar la operación con los datos y las reglas de hoy y **crea rutas nuevas** (con otro identificador); si
+  una regla ya no se cumple falla con su motivo y la operación sigue disponible para rehacer. Si una operación posterior actuaba
+  sobre una ruta que se eliminó (por ejemplo, optimizarla), esa operación ya no se puede rehacer (409) y se quita del historial. El historial es **por nombre de usuario**, vive en memoria, guarda las 20 operaciones
   más recientes y se pierde al reiniciar la API (no se comparte entre varias instancias).
 - **Cadena de alertas** ([8.14](#814-chain-of-responsibility--de-la-alerta-reportada-a-quien-debe-atenderla)): escalar solo
   **avisa y deja constancia**; no resuelve ni reasigna nada (resolver sigue siendo manual) y no hay re-escalamiento por tiempo (una
@@ -1481,6 +1840,15 @@ para mantenerlo simple, y quedan documentadas aquí para quien continúe el proy
   falla tras agotar los reintentos, la alerta ya quedó guardada pero la API responde con error (no hay bandeja de salida para
   reintentarlo después). `POST /api/alerts` ahora rechaza descripciones vacías o de más de 500 caracteres y retrasos de más de
   1440 minutos, que antes aceptaba.
+- **Iterator, Mediator y Memento** ([8.15](#815-iterator--recorrer-la-carga-de-una-ruta-sin-conocer-su-estructura), [8.16](#816-mediator--coordinar-el-estado-de-la-ruta-con-el-del-vehículo) y [8.17](#817-memento--volver-al-orden-anterior-de-las-paradas)): el iterador es de un solo uso y no está pensado para
+  recorrer un árbol mientras otro proceso lo modifica (cada nodo se lee al visitarlo); `GET /api/routes/{id}/cargo-items` no lo
+  consume ninguna pantalla todavía. El Mediator coordina solo la ruta y su vehículo: `VehicleService` (cambio manual del estado) y
+  `MaintenanceService` (registrar un mantenimiento) siguen cambiando el vehículo por su cuenta y sin avisar a las rutas, como antes.
+  Una alerta con retraso deja la ruta Retrasada **sin** tocar al vehículo (comportamiento que ya existía y que se conservó a
+  propósito; pedir el estado Retrasada por la API sí lo deja En ruta), y sigue sin comprobar el estado anterior de la ruta (una ruta
+  ya terminada que recibe una alerta con retraso queda Retrasada). El Memento cubre solo el orden de las paradas y las estimaciones
+  al optimizar (no el estado de la ruta, del vehículo ni la carga) y vive en el historial en memoria de cada usuario, que se pierde al
+  reiniciar la API.
 - Los endpoints con "—" en la columna "Rol requerido" de la [sección 9](#9-documentación-de-la-api-rest) (todos los `GET`,
   incluido `GET /api/routes/{id}/optimization`, y algunos de escritura como `PATCH /api/routes/{id}/status`) responden sin exigir
   sesión; antes de producción conviene exigirla en todos.
@@ -1589,26 +1957,76 @@ no algo que se ejecute con `dotnet test`.
 
 ### Pruebas de Command y de Chain of Responsibility (secciones 8.13 y 8.14)
 
-Con estas pruebas el total esperado en el mismo proyecto es de **800**: las 603 anteriores (ninguno de sus archivos cambió) más
-197 nuevas (cada fila de un `[Theory]` cuenta como una prueba). Siguen sin usar librerías de mocking: se usan repositorios en
+Con estas pruebas el total esperado en el mismo proyecto es de **840**: las 603 anteriores (ninguna de esas pruebas cambió; solo
+ganó una línea un archivo de apoyo, `Simulation/SimulationFakes.cs`, porque su repositorio de rutas de prueba debe implementar el
+nuevo `DeleteAsync`) más 237 nuevas (cada fila de un `[Theory]` cuenta como una prueba). Siguen sin usar librerías de mocking: se usan repositorios en
 memoria reales y dobles escritos a mano.
 
 | Carpeta o archivo | Qué demuestra |
 |-------------------|----------------|
-| `Command/` (82) | `CommandHistory`: orden de deshacer y rehacer, capacidad de 20 (descarta la más antigua), una operación nueva descarta lo rehacible y exclusión para que dos peticiones no se pisen. `CommandInvoker`: ejecuta y anota (con la hora del reloj y el usuario en la bitácora), no guarda lo que falla ni lo que no cambió nada, un 409 quita la operación del historial y una falla pasajera la conserva, dos «deshacer» a la vez no deshacen lo mismo dos veces y cada usuario tiene su historial. `InMemoryCommandHistoryStore`: un historial por usuario (sin distinguir mayúsculas ni espacios). Las tres órdenes con repositorios reales: crear (deshacer cancela, rehacer crea una ruta nueva), orden optimizado (`RouteSnapshotService` restaura orden, distancia y tiempo; se niega si la ruta salió o sus paradas cambiaron) y plan de reparto (`PlannedRouteCanceller` cancela todas o ninguna). |
+| `Command/` (122) | `CommandHistory`: orden de deshacer y rehacer, capacidad de 20 (descarta la más antigua), una operación nueva descarta lo rehacible y exclusión para que dos peticiones no se pisen. `CommandInvoker`: ejecuta y anota (con la hora del reloj y el usuario en la bitácora), no guarda lo que falla ni lo que no cambió nada, un 409 quita la operación del historial y una falla pasajera la conserva, dos «deshacer» a la vez no deshacen lo mismo dos veces y cada usuario tiene su historial. `InMemoryCommandHistoryStore`: un historial por usuario (sin distinguir mayúsculas ni espacios). Las tres órdenes con repositorios reales: crear (deshacer ELIMINA la ruta, rehacer crea una nueva; repetido cinco veces no acumula rutas), orden optimizado (`RouteSnapshotService` restaura orden, distancia y tiempo; se niega si la ruta salió, ya no existe o sus paradas cambiaron) y plan de reparto (`PlannedRouteDeleter` elimina todas o ninguna, deja constancia en la auditoría y no toca al vehículo). Las órdenes que dependen de una ruta eliminada: rehacer una optimización o una copia cuya ruta ya no existe se niega con el motivo y se quita del historial (no queda un «Rehacer» atascado). `RouteRepositoryDeleteTests` (4): el borrado del repositorio en memoria. `RouteCreationCommandsTests` (25): las dos formas de crear una ruta que faltaban, una por una —«⚡ express» y «⧉ duplicar» se ejecutan y quedan en el historial; deshacer elimina la ruta creada (la copia, no la original); rehacer crea una nueva; una regla incumplida no deja historial; una ruta que ya salió se niega a deshacerse—, y para las tres formas el mismo comportamiento por compartir la base (`[Theory]`), mezcladas y deshechas de la más reciente a la más antigua. |
 | `AlertHandling/` (102) | `AlertHandlerChain`: orden, quien no puede atender nunca corta la cadena, quien consume la corta, una falla no se oculta y un manejador nuevo se inserta sin tocar a los demás. `AlertReportContext`. Cada manejador: validar (con límites configurables), registrar, clasificar, escalar (nivel, prioridad, destinatario y bitácora; nunca resuelve la alerta) y dejar abierta. `AlertSeverityPolicy` y `AlertHandlingOptions` (valores por defecto y validación al arrancar). La cadena de producción completa con el servicio real y repositorios reales: leve, avería, accidente, retraso largo, reportes rechazados que no guardan nada y que escalar nunca resuelve. `AlertHandlingTripAlertService`: solo `CreateAlertAsync` pasa por la cadena. |
 | `Assignment/DeliveryRouteServiceVehicleReleaseTests.cs` (6) | Terminar o cancelar una ruta no libera a un vehículo que sigue en otra ruta activa (en curso o retrasada) y sí libera al que solo estaba en esa. |
 | `Architecture/CommandAndChainDesignTests.cs` (7) | El invocador, el historial y el almacén no conocen ninguna orden concreta; las órdenes y los manejadores solo reciben interfaces y datos (nunca repositorios ni clases concretas); las interfaces nuevas siguen siendo pequeñas; y el código que ya existía no conoce los patrones nuevos. Revisan las **firmas** de los tipos, no el cuerpo de los métodos. |
 
-Para ejecutar sólo una parte: `dotnet test --filter "FullyQualifiedName~Command"` (89: las 82 de `Command/` y las 7 de arquitectura, cuyo nombre también lleva «Command») o `...~AlertHandling` (102).
+Para ejecutar sólo una parte: `dotnet test --filter "FullyQualifiedName~Command"` (129: las 122 de `Command/` y las 7 de arquitectura, cuyo nombre también lleva «Command») o `...~AlertHandling` (102).
 
 **Cómo se comprobó que estas pruebas detectan fallos.** Durante el desarrollo se rompieron a propósito 63 reglas clave del
 código (el orden y la capacidad del historial, el invocador, el historial por usuario, la foto y la restauración de paradas, el
-todo o nada del cancelador, las tres órdenes, la liberación del vehículo, la validación, la política de gravedad, el
+todo o nada del cancelador (hoy «eliminador»), las tres órdenes, la liberación del vehículo, la validación, la política de gravedad, el
 escalamiento —nivel, prioridad, destinatario, bitácora y que una falla no se oculte—, el orden de la cadena de producción, el
 decorador, que escalar no resuelva la alerta y 7 violaciones de diseño para las pruebas de arquitectura) y se volvieron a
-ejecutar las pruebas: las 63 rupturas fueron detectadas. Es una verificación del desarrollo (ejecutada en el arnés descrito en
+ejecutar las pruebas: las 63 rupturas fueron detectadas. Al corregir las tres formas de crear una ruta (versión 2) se rompieron
+a propósito otras 13 reglas del código nuevo (la base común —deshacer, rehacer, `HasEffect` y el guardado de la ruta creada—, la
+descripción y los datos de «⚡ express» y del formulario, que «⧉ duplicar» no pierda la fecha pedida ni el nombre de la copia, y que la fábrica
+arme la fuente correcta y una orden distinta cada vez) y las 13 fueron detectadas. Al cambiar «Deshacer» para que elimine la ruta
+(versión 3) se repitieron esas 13 (adaptadas al eliminador) y se agregaron 15 más sobre lo nuevo —que el eliminador compruebe todas
+antes de borrar y no borre una ruta que ya salió, que borre de verdad en vez de cancelar, que deje constancia en la auditoría, que
+el plan de reparto elimine todas sus rutas, el borrado del repositorio, y rehacer o deshacer una orden cuya ruta ya no existe—:
+las 28 fueron detectadas. Las 63 primeras siguen sin repetirse con el código actual. Es una verificación del desarrollo (ejecutada en el arnés descrito en
 la [sección 11](#11-limitaciones-conocidas-del-prototipo)), no algo que se ejecute con `dotnet test`.
+
+### Pruebas de Iterator, Mediator y Memento (secciones 8.15, 8.16 y 8.17)
+
+Con estas pruebas el total esperado en el mismo proyecto es de **1013**: las 840 anteriores más 173 nuevas (cada fila de un `[Theory]`
+cuenta como una prueba). Ninguna prueba anterior cambió de contenido: en 10 archivos de prueba y de apoyo
+solo cambió la línea que arma a mano `DeliveryRouteService` o `TripAlertService`, porque ahora reciben el participante de rutas
+([8.16](#816-mediator--coordinar-el-estado-de-la-ruta-con-el-del-vehículo)), y `AlertHandlingKit` ganó una propiedad `Vehicles`. Siguen sin usar librerías de mocking: repositorios en memoria
+reales y dobles escritos a mano.
+
+| Archivo | Qué demuestra |
+|---------|----------------|
+| `Iterator/CargoIteratorTests.cs` (25) | El recorrido en profundidad y pre-orden de grupos y artículos (anidados, orden de los hijos, hoja suelta, grupo y ruta vacíos); `HasNext()` que no consume y `Next()` agotado (`InvalidOperationException`); dos iteradores independientes sobre el mismo árbol; sin duplicados (un componente compartido por dos grupos se entrega una vez mientras `Traverse()` lo repite) y un componente propio que forma un ciclo no genera un bucle infinito; un árbol muy profundo sin recursión; el filtro; que no modifica el árbol; y que entrega lo mismo que `Traverse()` (compatibilidad con el Composite). |
+| `Iterator/CargoManifestItemsServiceTests.cs` (11) | La lista plana de una ruta real: orden, datos de cada artículo, que coincide con las hojas del manifiesto jerárquico y con los totales de su raíz, redondeo a 3 decimales, ruta sin carga (lista vacía), ruta inexistente (`null`) y que `GetManifestAsync` y la ruta no cambiaron. |
+| `Mediator/FleetLifecycleMediatorTests.cs` (19) | El mediador solo, con participantes de prueba que registran lo que reciben: qué le ordena al de vehículos y cuándo le pregunta al de rutas, la respuesta de uno viaja hasta el otro, ruta sin vehículo, ruta planificada y la decisión de las alertas. |
+| `Mediator/LifecycleParticipantsTests.cs` (33) | Cada participante por separado: el de vehículos (En ruta sin condiciones, liberar solo si iba En ruta y no sigue en otro viaje, vehículo inexistente) y el de rutas (guarda y *después* avisa al mediador, suma retrasos, qué es un viaje activo). |
+| `Mediator/RouteVehicleLifecycleIntegrationTests.cs` (35) | Todo junto, con los servicios y los repositorios reales: las cuatro reglas de negocio por `UpdateRouteStatusAsync`, vehículos con otro viaje activo, vehículos en Mantenimiento o Fuera de servicio, ruta sin vehículo, errores de siempre (404 y 400 antes del mediador), **la misma línea de auditoría de antes** y ninguna notificación nueva, el Decorator de asignación, el retraso por alerta con la cadena y el puente de avisos, y el resumen del dashboard (Facade). |
+| `Mediator/MediatorDesignTests.cs` (9) | Pruebas de arquitectura: todo vive en `Mediators`, los participantes no se conocen entre sí, el mediador no conoce repositorios ni servicios, de las piezas del Mediator los servicios solo conocen (por su interfaz) al participante de rutas, y ningún servicio depende de otro. |
+| `Mediator/VehicleColleaguePersistenceTests.cs` (6) | Que el participante de vehículos **guarda** lo que cambia, comprobado con un repositorio que entrega copias (con el repositorio en memoria del proyecto, que entrega siempre el mismo objeto, un guardado olvidado pasaría inadvertido). |
+| `Memento/RouteMementoTests.cs` (22) | El Originator crea el recuerdo con el orden real de las paradas y las estimaciones, sin información de más; es independiente de cambios posteriores de la ruta y de otros recuerdos; no se puede alterar ni fabricar desde fuera; restaura el orden, la distancia y la duración y deja lo demás igual; y rechaza (sin cambiar nada) una ruta que ya salió, que cambió de paradas o que ya no existe, un recuerdo ajeno y uno nulo. |
+| `Memento/RouteMementoWithCommandTests.cs` (10) | El Caretaker (la orden) solo ve la interfaz estrecha y no la filtra; deshacer devuelve el recuerdo al Originator; deshacer y rehacer varias veces sin deriva; cada ejecución toma su propio recuerdo; dos optimizaciones se deshacen en orden inverso; si el Originator rechaza, la entrada sale del historial. |
+| `Memento/RouteMementoPersistenceTests.cs` (3) | Lo restaurado queda guardado en el almacén (repositorio que entrega copias); capturar y una restauración rechazada no cambian nada. |
+| `Support/CopyingRepositories.cs`, `Support/FleetMediators.cs` | Repositorios de prueba que entregan copias, y el armado del participante de rutas real para las pruebas que construyen los servicios a mano. |
+
+Para ejecutar sólo una parte: `dotnet test --filter "FullyQualifiedName~Application.Tests.Iterator"` (36), `...~Application.Tests.Mediator` (102) o
+`...~Application.Tests.Memento` (35).
+
+**Pruebas de mutación de Iterator, Mediator y Memento.** Igual que en las versiones anteriores, se rompieron a propósito **68 reglas** del código
+nuevo o reforzado —una por una, en una copia— y se volvieron a ejecutar las pruebas; una mutación «muere» si alguna prueba falla.
+Las 68 murieron. Por patrón: **Iterator (16)** —el orden de los hijos, que no repita componentes, que `HasNext()` no consuma, que al terminar
+no entregue `null`, que el filtro se aplique y no descarte el subárbol, la raíz nula, qué cuenta como artículo y, en la lista plana, la
+posición inicial, el redondeo del peso y del volumen, la prioridad y el total—; **Mediator (31)** —lo que el mediador ordena y pregunta en
+cada transición, que no ignore el otro viaje activo, que pregunte por la ruta correcta, la ruta sin vehículo, que el retraso de una alerta no
+toque al vehículo, que el participante de rutas guarde y *después* avise, que sume los minutos y qué es un viaje activo, que el de vehículos
+guarde de verdad lo que cambia, y que los servicios no se salten al participante de rutas ni dejen de auditar—; y **Memento (21)** —la copia
+propia de las paradas, que el recuerdo no se pueda convertir en una lista modificable ni se fabrique desde fuera, que conserve cada dato en su
+lugar (distancia y duración no intercambiadas), que el Originator rechace un recuerdo ajeno y una ruta que ya salió o cambió de paradas,
+que restaure orden, lista, distancia y duración y que lo guarde, y que el Caretaker tome un recuerdo nuevo en cada ejecución y no deje una
+orden irrecuperable en el historial—. En las primeras corridas **sobrevivieron 6**, y eran huecos reales de mis pruebas, no del producto:
+2 sobre el redondeo de la lista plana, 3 sobre «guardar de verdad» lo que se cambia (el repositorio en memoria entrega siempre el mismo
+objeto, así que un guardado olvidado no se notaba) y 1 sobre la guarda del deshacer. Agregué pruebas (con repositorios de prueba que
+entregan copias) y las 6 murieron. Es una verificación del desarrollo (ejecutada en el arnés descrito en la [sección 11](#11-limitaciones-conocidas-del-prototipo)),
+no algo que se ejecute con `dotnet test`.
 
 ### Demostración manual / en vivo (sin correr pruebas)
 

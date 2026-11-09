@@ -1,5 +1,6 @@
 using FleetManagement.Application.Assignment;
 using FleetManagement.Application.Commands;
+using FleetManagement.Application.DTOs;
 using FleetManagement.Domain.Entities;
 using FleetManagement.Domain.Enums;
 using Xunit;
@@ -10,7 +11,7 @@ namespace FleetManagement.Application.Tests.Command;
 /// <summary>
 /// Las tres órdenes reales (crear una ruta, aplicar el orden optimizado, aplicar el plan de reparto) ejecutadas por el
 /// invocador con los servicios reales: qué cambia al ejecutarlas, al deshacerlas y al rehacerlas, y cuándo se niegan a
-/// deshacer porque el mundo ya cambió.
+/// deshacer o rehacer porque el mundo ya cambió. Deshacer una creación ELIMINA la ruta (no la deja cancelada).
 /// </summary>
 public class RouteCommandsTests
 {
@@ -38,34 +39,34 @@ public class RouteCommandsTests
     }
 
     [Fact]
-    public async Task UndoingCreateRoute_CancelsTheRoute_ItIsNotDeleted()
+    public async Task UndoingCreateRoute_DeletesTheRoute_ItIsNotLeftCancelled()
     {
         var created = await RunAsync(_kit.Commands.CreateRoute(NewRouteRequest()));
 
         var step = await _kit.Invoker.UndoAsync(Admin);
 
         Assert.Equal("Crear la ruta 'Ruta Norte'", step.Description);
-        Assert.Equal(DeliveryRouteStatus.Cancelled, (await _kit.RouteAsync(created.Id)).Status);
-        Assert.Single(await _kit.AllRoutesAsync());
+        Assert.False(await _kit.RouteExistsAsync(created.Id));
+        Assert.Empty(await _kit.AllRoutesAsync());
     }
 
     [Fact]
-    public async Task RedoingCreateRoute_CreatesANewRoute_AndTheCancelledOneStaysCancelled()
+    public async Task RedoingCreateRoute_CreatesANewRoute_AndTheOldOneIsGone()
     {
         var first = await RunAsync(_kit.Commands.CreateRoute(NewRouteRequest()));
         await _kit.Invoker.UndoAsync(Admin);
 
         await _kit.Invoker.RedoAsync(Admin);
 
-        var routes = await _kit.AllRoutesAsync();
-        Assert.Equal(2, routes.Count);
-        Assert.Equal(DeliveryRouteStatus.Cancelled, (await _kit.RouteAsync(first.Id)).Status);
-        Assert.Single(routes, route => route.Status == DeliveryRouteStatus.Planned);
-        Assert.All(routes, route => Assert.Equal("Ruta Norte", route.Name));
+        var route = Assert.Single(await _kit.AllRoutesAsync()); // una sola: la nueva
+        Assert.NotEqual(first.Id, route.Id);
+        Assert.False(await _kit.RouteExistsAsync(first.Id));
+        Assert.Equal(DeliveryRouteStatus.Planned, route.Status);
+        Assert.Equal("Ruta Norte", route.Name);
     }
 
     [Fact]
-    public async Task UndoingAgain_AfterARedo_CancelsTheNewRoute_NotTheOldOne()
+    public async Task UndoingAgain_AfterARedo_DeletesTheNewRoute_AndNothingIsLeft()
     {
         await RunAsync(_kit.Commands.CreateRoute(NewRouteRequest()));
         await _kit.Invoker.UndoAsync(Admin);
@@ -73,7 +74,23 @@ public class RouteCommandsTests
 
         await _kit.Invoker.UndoAsync(Admin);
 
-        Assert.All(await _kit.AllRoutesAsync(), route => Assert.Equal(DeliveryRouteStatus.Cancelled, route.Status));
+        Assert.Empty(await _kit.AllRoutesAsync());
+    }
+
+    [Fact]
+    public async Task UndoingAndRedoingManyTimes_NeverLeavesMoreThanOneRoute_NorACancelledOne()
+    {
+        await RunAsync(_kit.Commands.CreateRoute(NewRouteRequest()));
+
+        for (var cycle = 1; cycle <= 5; cycle++)
+        {
+            await _kit.Invoker.UndoAsync(Admin);
+            Assert.Empty(await _kit.AllRoutesAsync());
+
+            await _kit.Invoker.RedoAsync(Admin);
+            var route = Assert.Single(await _kit.AllRoutesAsync());
+            Assert.Equal(DeliveryRouteStatus.Planned, route.Status);
+        }
     }
 
     [Fact]
@@ -85,7 +102,7 @@ public class RouteCommandsTests
         var error = await Assert.ThrowsAsync<CommandNotUndoableException>(() => _kit.Invoker.UndoAsync(Admin));
 
         Assert.Contains("'Ruta Norte' ya no está planificada (está en progreso)", error.Message);
-        Assert.Contains("No se canceló ninguna", error.Message);
+        Assert.Contains("No se eliminó ninguna", error.Message);
         Assert.Equal(DeliveryRouteStatus.InProgress, (await _kit.RouteAsync(created.Id)).Status);
         Assert.Empty(await UndoableAsync());   // ya no se puede deshacer nunca: se quitó
         Assert.Empty(await RedoableAsync());
@@ -227,34 +244,54 @@ public class RouteCommandsTests
     }
 
     [Fact]
-    public async Task UndoingTheDispatchPlan_CancelsEveryRouteItCreated_AndNothingElse()
+    public async Task UndoingTheDispatchPlan_DeletesEveryRouteItCreated_AndNothingElse()
     {
         await TwoSmallVansAsync();
         var untouched = await _kit.PlannedZigZagRouteAsync("Otra ruta");
-        await RunAsync(_kit.Commands.ApplyDispatchPlan(TwoHeavyDeliveries()));
+        var result = await RunAsync(_kit.Commands.ApplyDispatchPlan(TwoHeavyDeliveries()));
+        Assert.Equal(3, (await _kit.AllRoutesAsync()).Count);
 
         await _kit.Invoker.UndoAsync(Admin);
 
-        var routes = await _kit.AllRoutesAsync();
-        Assert.Equal(3, routes.Count);
-        Assert.Equal(2, routes.Count(route => route.Status == DeliveryRouteStatus.Cancelled));
-        Assert.Equal(DeliveryRouteStatus.Planned, (await _kit.RouteAsync(untouched.Id)).Status);
+        var remaining = Assert.Single(await _kit.AllRoutesAsync()); // solo queda la ruta que no era del plan
+        Assert.Equal(untouched.Id, remaining.Id);
+        Assert.Equal(DeliveryRouteStatus.Planned, remaining.Status);
+        foreach (var created in result.CreatedRoutes)
+            Assert.False(await _kit.RouteExistsAsync(created.Id));
     }
 
     [Fact]
-    public async Task RedoingTheDispatchPlan_AppliesItAgain_AndTheOldRoutesStayCancelled()
+    public async Task RedoingTheDispatchPlan_AppliesItAgain_AndTheOldRoutesAreGone()
     {
         await TwoSmallVansAsync();
-        await RunAsync(_kit.Commands.ApplyDispatchPlan(TwoHeavyDeliveries()));
+        var first = await RunAsync(_kit.Commands.ApplyDispatchPlan(TwoHeavyDeliveries()));
         await _kit.Invoker.UndoAsync(Admin);
 
         await _kit.Invoker.RedoAsync(Admin);
 
         var routes = await _kit.AllRoutesAsync();
-        Assert.Equal(4, routes.Count);
-        Assert.Equal(2, routes.Count(route => route.Status == DeliveryRouteStatus.Cancelled));
-        Assert.Equal(2, routes.Count(route => route.Status == DeliveryRouteStatus.Planned));
+        Assert.Equal(2, routes.Count); // las del plan rehecho; las anteriores ya no están
+        Assert.All(routes, route => Assert.Equal(DeliveryRouteStatus.Planned, route.Status));
+        Assert.DoesNotContain(routes, route => first.CreatedRoutes.Any(old => old.Id == route.Id));
         Assert.Single(await UndoableAsync());
+    }
+
+    [Fact]
+    public async Task UndoingAndRedoingTheDispatchPlanManyTimes_NeverAccumulatesRoutes()
+    {
+        await TwoSmallVansAsync();
+        await RunAsync(_kit.Commands.ApplyDispatchPlan(TwoHeavyDeliveries()));
+
+        for (var cycle = 1; cycle <= 4; cycle++)
+        {
+            await _kit.Invoker.UndoAsync(Admin);
+            Assert.Empty(await _kit.AllRoutesAsync());
+
+            await _kit.Invoker.RedoAsync(Admin);
+            var routes = await _kit.AllRoutesAsync();
+            Assert.Equal(2, routes.Count);
+            Assert.All(routes, route => Assert.Equal(DeliveryRouteStatus.Planned, route.Status));
+        }
     }
 
     [Fact]
@@ -271,7 +308,7 @@ public class RouteCommandsTests
         Assert.Contains($"'{departed.Name}' ya no está planificada", error.Message);
         Assert.DoesNotContain($"'{waiting.Name}'", error.Message);
         Assert.Equal(DeliveryRouteStatus.InProgress, (await _kit.RouteAsync(departed.Id)).Status);
-        Assert.Equal(DeliveryRouteStatus.Planned, (await _kit.RouteAsync(waiting.Id)).Status); // la que sí se podía cancelar, no se tocó
+        Assert.Equal(DeliveryRouteStatus.Planned, (await _kit.RouteAsync(waiting.Id)).Status); // la que sí se podía eliminar, no se tocó
     }
 
     [Fact]
@@ -311,12 +348,63 @@ public class RouteCommandsTests
 
         var first = await _kit.Invoker.UndoAsync(Admin);
         Assert.Equal("Crear la ruta 'Ruta nueva'", first.Description);
-        Assert.Equal(DeliveryRouteStatus.Cancelled, (await _kit.RouteAsync(created.Id)).Status);
+        Assert.False(await _kit.RouteExistsAsync(created.Id));
         Assert.Equal(new[] { "B", "C", "A" }, await _kit.StopLabelsAsync(zigZag.Id)); // la optimización sigue puesta
 
         var second = await _kit.Invoker.UndoAsync(Admin);
         Assert.Equal("Aplicar el orden optimizado de paradas a la ruta 'Ruta zig-zag'", second.Description);
         Assert.Equal(new[] { "A", "B", "C" }, await _kit.StopLabelsAsync(zigZag.Id));
+    }
+
+    // ------------------------------------------------------------------ órdenes que dependen de una ruta que ya no existe
+
+    private static CreateDeliveryRouteRequest ZigZagRequest()
+        => new("Ruta con paradas", 0, 0, 0, 0.6, new List<WaypointDto> { new(0, 0.5, "A", 0), new(0, 0.1, "B", 1), new(0, 0.3, "C", 2) }, null, null, null, null);
+
+    [Fact]
+    public async Task UndoingTheOptimization_OfARouteThatNoLongerExists_IsRefused_AndRemovedFromTheHistory()
+    {
+        var route = await _kit.PlannedZigZagRouteAsync();
+        await RunAsync(_kit.Commands.ApplyOptimization(route.Id));
+        await _kit.Fleet.Routes.DeleteAsync(route.Id); // la ruta desapareció (por ejemplo, otra orden deshizo su creación)
+
+        var error = await Assert.ThrowsAsync<CommandNotUndoableException>(() => _kit.Invoker.UndoAsync(Admin));
+
+        Assert.Contains("La ruta 'Ruta zig-zag' ya no existe", error.Message);
+        Assert.Empty(await UndoableAsync());   // no queda un «Deshacer» atascado
+        Assert.Empty(await RedoableAsync());
+    }
+
+    [Fact]
+    public async Task RedoingAnOptimization_OfARouteThatWasDeletedByUndoingItsCreation_IsRefused_AndRemovedFromTheHistory()
+    {
+        var created = await RunAsync(_kit.Commands.CreateRoute(ZigZagRequest()));
+        var optimized = await RunAsync(_kit.Commands.ApplyOptimization(created.Id));
+        Assert.True(optimized.Applied);
+        await _kit.Invoker.UndoAsync(Admin); // restaura el orden de las paradas
+        await _kit.Invoker.UndoAsync(Admin); // elimina la ruta
+        await _kit.Invoker.RedoAsync(Admin); // la vuelve a crear: es una ruta NUEVA, con otro Id
+
+        var error = await Assert.ThrowsAsync<CommandNotRedoableException>(() => _kit.Invoker.RedoAsync(Admin));
+
+        Assert.Contains("La ruta 'Ruta con paradas' ya no existe", error.Message);
+        Assert.Empty(await RedoableAsync());   // no queda un «Rehacer» atascado
+        Assert.Equal(new[] { "Crear la ruta 'Ruta con paradas'" }, await UndoableAsync());
+        var onlyRoute = Assert.Single(await _kit.AllRoutesAsync()); // solo la ruta nueva
+        Assert.NotEqual(created.Id, onlyRoute.Id);
+    }
+
+    [Fact]
+    public async Task RedoingAnOptimization_WhenTheRouteStillExists_StillWorks()
+    {
+        var created = await RunAsync(_kit.Commands.CreateRoute(ZigZagRequest()));
+        await RunAsync(_kit.Commands.ApplyOptimization(created.Id));
+        await _kit.Invoker.UndoAsync(Admin); // solo se deshace la optimización: la ruta sigue
+
+        await _kit.Invoker.RedoAsync(Admin);
+
+        Assert.Equal(new[] { "B", "C", "A" }, await _kit.StopLabelsAsync(created.Id));
+        Assert.Equal(2, (await UndoableAsync()).Length);
     }
 
     [Fact]

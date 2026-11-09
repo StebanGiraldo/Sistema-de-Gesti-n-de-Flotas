@@ -107,6 +107,8 @@ public sealed class FakeRouteRepository : IDeliveryRouteRepository
         _routes[route.Id] = route;
         return Task.CompletedTask;
     }
+
+    public Task DeleteAsync(Guid id) => throw new NotSupportedException();
 }
 
 /// <summary>

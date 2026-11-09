@@ -9,6 +9,7 @@ using FleetManagement.Application.Optimization;
 using FleetManagement.Application.Services;
 using FleetManagement.Application.Tests.Assignment;
 using FleetManagement.Application.Tests.Decorator;
+using FleetManagement.Application.Tests.Support;
 using FleetManagement.Domain.Entities;
 using FleetManagement.Domain.Enums;
 using Xunit;
@@ -29,7 +30,7 @@ public class DispatchPlanningServiceTests
 
     private IDeliveryRouteService GuardedRoutes()
         => new AssignmentValidatingRouteService(
-            new DeliveryRouteService(_kit.Routes, _kit.Vehicles, _kit.Drivers, new DeliveryRouteBuilder(), new DeliveryRouteDirector(), _audit, _profiles),
+            new DeliveryRouteService(_kit.Routes, _kit.Vehicles, _kit.Drivers, new DeliveryRouteBuilder(), new DeliveryRouteDirector(), _audit, FleetMediators.CreateRouteColleague(_kit.Routes, _kit.Vehicles), _profiles),
             _kit.Validator);
 
     private DispatchPlanningService Service(IRouteAssignmentValidator? validator = null)

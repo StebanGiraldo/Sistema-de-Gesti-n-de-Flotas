@@ -1,6 +1,6 @@
 /**
  * Deshacer / Rehacer (patrón Command). Esta página no sabe qué hace cada operación: el backend guarda, por usuario, las
- * órdenes que ejecutó (crear una ruta, aplicar el orden optimizado, aplicar un plan de reparto) y entrega el texto de la
+ * órdenes que ejecutó (crear una ruta —por el formulario, express o duplicando otra—, aplicar el orden optimizado, aplicar un plan de reparto) y entrega el texto de la
  * siguiente que se puede deshacer o rehacer. Aquí solo se muestran los dos botones y se pide deshacer o rehacer.
  *
  * Se carga después de dashboard.js y dispatch.js: usa showToast y refreshRoutes de dashboard.js.
@@ -15,17 +15,27 @@ function setCommandButton(button, verb, nextEntry, emptyHint) {
   button.title = nextEntry ? `${verb}: ${nextEntry.description}` : emptyHint;
 }
 
-function renderCommandHistory(history) {
-  setCommandButton(undoCommandBtn, 'Deshacer', history && history.undoable[0], 'No hay nada que deshacer');
-  setCommandButton(redoCommandBtn, 'Rehacer', history && history.redoable[0], 'No hay nada que rehacer');
+/**
+ * Muestra el historial en los dos botones. Si no se pudo leer (`readError`), los botones quedan apagados —sin historial no hay
+ * qué deshacer— pero el texto de ayuda lo dice, para no confundirlo con "todavía no hay nada que deshacer".
+ */
+function renderCommandHistory(history, readError) {
+  const unreadable = readError
+    ? `No se pudo leer el historial (${readError.message}). Recarga la página con Ctrl+F5 y confirma que la API se reinició con la última versión.`
+    : null;
+  setCommandButton(undoCommandBtn, 'Deshacer', history && history.undoable[0],
+    unreadable ?? 'No hay nada que deshacer todavía. Se pueden deshacer: crear una ruta (formulario, express o duplicada), aplicar el orden optimizado y aplicar el plan de reparto.');
+  setCommandButton(redoCommandBtn, 'Rehacer', history && history.redoable[0],
+    unreadable ?? 'No hay nada que rehacer: aquí aparece lo último que deshagas.');
 }
 
-/** Vuelve a leer el historial del usuario. Si no se puede leer, los botones quedan apagados: sin historial no hay qué deshacer. */
+/** Vuelve a leer el historial del usuario. Si no se puede leer, los botones quedan apagados y se deja el motivo en la consola. */
 async function refreshCommandHistory() {
   try {
     renderCommandHistory(await FleetAPI.getCommandHistory());
-  } catch {
-    renderCommandHistory(null);
+  } catch (err) {
+    console.warn('Deshacer/Rehacer: no se pudo leer el historial.', err);
+    renderCommandHistory(null, err);
   }
 }
 

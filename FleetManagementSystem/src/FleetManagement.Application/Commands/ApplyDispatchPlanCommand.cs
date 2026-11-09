@@ -4,21 +4,21 @@ using FleetManagement.Application.Interfaces.Services;
 namespace FleetManagement.Application.Commands;
 
 /// <summary>
-/// Aplicar un plan de reparto (crea una ruta planificada por viaje). Deshacer cancela las rutas que creó, todas o ninguna,
+/// Aplicar un plan de reparto (crea una ruta planificada por viaje). Deshacer ELIMINA las rutas que creó, todas o ninguna,
 /// y solo si siguen planificadas. Rehacer vuelve a aplicar el plan con la flota de ese momento: puede dar otro reparto o,
 /// si ya no hay vehículos, fallar con el motivo.
 /// </summary>
 public sealed class ApplyDispatchPlanCommand : IUndoableCommand<DispatchApplyResultDto>
 {
     private readonly IDispatchPlanningService _dispatch;
-    private readonly IPlannedRouteCanceller _canceller;
+    private readonly IPlannedRouteDeleter _deleter;
     private readonly DispatchPlanRequest _request;
     private IReadOnlyList<Guid> _createdRouteIds = Array.Empty<Guid>();
 
-    public ApplyDispatchPlanCommand(IDispatchPlanningService dispatch, IPlannedRouteCanceller canceller, DispatchPlanRequest request)
+    public ApplyDispatchPlanCommand(IDispatchPlanningService dispatch, IPlannedRouteDeleter deleter, DispatchPlanRequest request)
     {
         _dispatch = dispatch;
-        _canceller = canceller;
+        _deleter = deleter;
         _request = request;
     }
 
@@ -37,7 +37,7 @@ public sealed class ApplyDispatchPlanCommand : IUndoableCommand<DispatchApplyRes
         return result;
     }
 
-    public Task UndoAsync() => _canceller.CancelAsync(_createdRouteIds.ToList());
+    public Task UndoAsync() => _deleter.DeleteAsync(_createdRouteIds.ToList());
 
     public Task RedoAsync() => ExecuteAsync();
 }

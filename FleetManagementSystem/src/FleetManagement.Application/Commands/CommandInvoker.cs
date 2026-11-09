@@ -63,7 +63,16 @@ public sealed class CommandInvoker : ICommandInvoker
         return history.RunExclusiveAsync(async () =>
         {
             var entry = history.NextToRedo ?? throw new InvalidOperationException("No hay nada que rehacer.");
-            await entry.Action.RedoAsync();
+            try
+            {
+                await entry.Action.RedoAsync();
+            }
+            catch (CommandNotRedoableException ex)
+            {
+                history.DiscardNextToRedo();
+                _audit.LogEvent(AuditCategory, $"No se pudo rehacer: {entry.Action.Description}. {ex.Message} Se quitó del historial.", user);
+                throw;
+            }
 
             // Si al repetirla ya no cambió nada (otro la hizo antes), no hay nada que deshacer después.
             if (entry.Action.HasEffect)

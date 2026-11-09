@@ -14,6 +14,10 @@ namespace FleetManagement.Application.Services;
 /// <see cref="ICargoComponent"/>: es una única función recursiva, sin ramas
 /// distintas según el tipo (salvo la etiqueta "Kind" que sólo informa al
 /// cliente si el nodo es un grupo o un artículo).
+///
+/// La lista plana de artículos (<see cref="GetCargoItemsAsync"/>) la obtiene con el patrón ITERATOR
+/// (<see cref="ICargoIterator"/>): el servicio pide "el siguiente artículo" sin saber cuántos niveles de
+/// grupos tiene el árbol ni cómo se guardan sus hijos.
 /// </summary>
 public class CargoManifestService : ICargoManifestService
 {
@@ -33,6 +37,37 @@ public class CargoManifestService : ICargoManifestService
         var root = CargoManifest.ForRoute(route);
         return new CargoManifestDto(route.Id, ToNode(root));
     }
+
+    public async Task<CargoManifestItemsDto?> GetCargoItemsAsync(Guid routeId)
+    {
+        var route = await _routeRepository.GetByIdAsync(routeId);
+        if (route is null)
+            return null;
+
+        var root = CargoManifest.ForRoute(route);
+
+        var items = new List<CargoManifestItemDto>();
+        var iterator = root.CreateItemIterator();
+        while (iterator.HasNext())
+        {
+            if (iterator.Next() is CargoItemComponent leaf)
+                items.Add(ToItem(items.Count + 1, leaf));
+        }
+
+        return new CargoManifestItemsDto(
+            route.Id,
+            items.Count,
+            Math.Round(root.TotalWeightKg, 3),
+            Math.Round(root.TotalVolumeM3, 3),
+            items);
+    }
+
+    private static CargoManifestItemDto ToItem(int position, CargoItemComponent leaf) => new(
+        position,
+        leaf.Name,
+        Math.Round(leaf.TotalWeightKg, 3),
+        Math.Round(leaf.TotalVolumeM3, 3),
+        leaf.Item.Priority.ToString());
 
     private static CargoManifestNodeDto ToNode(ICargoComponent component) => new(
         component.Name,

@@ -6,6 +6,8 @@ namespace FleetManagement.Application.Commands;
 public interface IRouteCommandFactory
 {
     IUndoableCommand<DeliveryRouteDto> CreateRoute(CreateDeliveryRouteRequest request);
+    IUndoableCommand<DeliveryRouteDto> CreateExpressRoute(CreateExpressRouteRequest request);
+    IUndoableCommand<DeliveryRouteDto> DuplicateRoute(Guid routeId, DuplicateRouteRequest request);
     IUndoableCommand<RouteOptimizationDto> ApplyOptimization(Guid routeId);
     IUndoableCommand<DispatchApplyResultDto> ApplyDispatchPlan(DispatchPlanRequest request);
 }

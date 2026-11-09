@@ -117,11 +117,16 @@ public class RouteSnapshotServiceTests
     }
 
     [Fact]
-    public async Task Restore_OfAMissingRoute_IsNotFound()
+    public async Task Restore_OfARouteThatNoLongerExists_IsRefused_AsNotUndoable()
     {
+        // Antes una ruta nunca desaparecía (se cancelaba); ahora deshacer su creación la elimina, y deshacer algo que se
+        // hizo sobre ella ya no es posible: se explica (409) y se quita del historial en vez de dar un 404 que deja el botón atascado.
         var route = await _kit.PlannedZigZagRouteAsync();
         var snapshot = await _kit.Snapshots.CaptureAsync(route.Id);
+        await _kit.Fleet.Routes.DeleteAsync(route.Id);
 
-        await Assert.ThrowsAsync<KeyNotFoundException>(() => _kit.Snapshots.RestoreStopOrderAsync(snapshot with { RouteId = Guid.NewGuid() }));
+        var error = await Assert.ThrowsAsync<CommandNotUndoableException>(() => _kit.Snapshots.RestoreStopOrderAsync(snapshot));
+
+        Assert.Contains("La ruta 'Ruta zig-zag' ya no existe", error.Message);
     }
 }

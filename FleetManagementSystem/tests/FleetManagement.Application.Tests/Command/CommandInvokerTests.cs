@@ -269,6 +269,27 @@ public class CommandInvokerTests
     }
 
     [Fact]
+    public async Task Redo_OfAnOperationThatCanNoLongerBeRedone_RemovesItFromTheHistory_AndSaysWhy()
+    {
+        var invoker = Invoker();
+        var stale = new ScriptedCommand("B") { RedoFailure = new CommandNotRedoableException("la ruta ya no existe") };
+        await invoker.ExecuteAsync(Ana, new ScriptedCommand("A"));
+        await invoker.ExecuteAsync(Ana, stale);
+        await invoker.UndoAsync(Ana); // B
+        await invoker.UndoAsync(Ana); // A: ahora hay que rehacer A y después B
+        await invoker.RedoAsync(Ana);
+
+        var error = await Assert.ThrowsAsync<CommandNotRedoableException>(() => invoker.RedoAsync(Ana));
+
+        Assert.Equal("la ruta ya no existe", error.Message);
+        var history = await invoker.GetHistoryAsync(Ana);
+        Assert.Equal(new[] { "A" }, Descriptions(history.Undoable));
+        Assert.Empty(history.Redoable);   // B no queda como un «Rehacer» atascado
+        Assert.Equal(1, stale.RedoCalls);
+        Assert.Contains(_audit.Entries, entry => entry.Message.StartsWith("No se pudo rehacer: B.") && entry.Message.Contains("la ruta ya no existe") && entry.User == Ana);
+    }
+
+    [Fact]
     public async Task Redo_WhenItChangedNothing_DoesNotLeaveAnythingToUndo()
     {
         var invoker = Invoker();

@@ -28,4 +28,10 @@ public class InMemoryDeliveryRouteRepository : IDeliveryRouteRepository
         _routes[route.Id] = route;
         return Task.CompletedTask;
     }
+
+    public Task DeleteAsync(Guid id)
+    {
+        _routes.TryRemove(id, out _);
+        return Task.CompletedTask;
+    }
 }

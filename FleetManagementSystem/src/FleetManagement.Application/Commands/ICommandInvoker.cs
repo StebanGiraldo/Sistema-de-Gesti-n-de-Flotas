@@ -14,7 +14,7 @@ public interface ICommandInvoker
     /// <summary>Deshace la última operación del usuario. Si ya no se puede (<see cref="CommandNotUndoableException"/>), la quita del historial.</summary>
     Task<CommandStepDto> UndoAsync(string user);
 
-    /// <summary>Rehace la última operación deshecha. Si falla, queda disponible para reintentar.</summary>
+    /// <summary>Rehace la última operación deshecha. Si falla de forma pasajera, queda disponible para reintentar; si ya no es posible (<see cref="CommandNotRedoableException"/>), la quita del historial.</summary>
     Task<CommandStepDto> RedoAsync(string user);
 
     Task<CommandHistoryDto> GetHistoryAsync(string user);

@@ -226,7 +226,7 @@ public class AlertHandlingChainIntegrationTests
     public async Task WhenTheEscalationCannotBeSent_TheErrorIsNotHidden_AndTheAlertStaysRegistered()
     {
         var failing = new FleetManagement.Application.Tests.Decorator.FlakyNotificationChannel(failuresBeforeSuccess: int.MaxValue);
-        var inner = new FleetManagement.Application.Services.TripAlertService(_kit.Alerts, _kit.Routes, _kit.Audit, _kit.Channel);
+        var inner = new FleetManagement.Application.Services.TripAlertService(_kit.Alerts, _kit.Routes, _kit.Audit, _kit.Channel, Support.FleetMediators.CreateRouteColleague(_kit.Routes, _kit.Vehicles));
         var chain = DefaultAlertHandlerChain.Create(_kit.Options, inner, failing, _kit.Audit);
         var service = new AlertHandlingTripAlertService(inner, chain);
         var route = await _kit.AddRouteAsync();

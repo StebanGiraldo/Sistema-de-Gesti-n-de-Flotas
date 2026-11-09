@@ -2,6 +2,7 @@ using FleetManagement.Application.DTOs;
 using FleetManagement.Application.Interfaces;
 using FleetManagement.Application.Interfaces.Repositories;
 using FleetManagement.Application.Interfaces.Services;
+using FleetManagement.Application.Mediators;
 using FleetManagement.Application.Notifications;
 using FleetManagement.Application.Notifications.Decorators;
 using FleetManagement.Domain.Entities;
@@ -29,17 +30,20 @@ public class TripAlertService : ITripAlertService
     private readonly IDeliveryRouteRepository _routeRepository;
     private readonly IFleetAuditLogger _auditLogger;
     private readonly INotificationChannel _notificationChannel;
+    private readonly IRouteColleague _routeLifecycle; // MEDIATOR: participante de rutas; es quien cambia el estado de la ruta
 
     public TripAlertService(
         ITripAlertRepository alertRepository,
         IDeliveryRouteRepository routeRepository,
         IFleetAuditLogger auditLogger,
-        INotificationChannel notificationChannel)
+        INotificationChannel notificationChannel,
+        IRouteColleague routeLifecycle)
     {
         _alertRepository = alertRepository;
         _routeRepository = routeRepository;
         _auditLogger = auditLogger;
         _notificationChannel = notificationChannel;
+        _routeLifecycle = routeLifecycle;
     }
 
     public async Task<IReadOnlyList<TripAlertDto>> GetAllAsync()
@@ -75,12 +79,10 @@ public class TripAlertService : ITripAlertService
         };
         var saved = await _alertRepository.AddAsync(alert);
 
+        // MEDIATOR: el retraso ya no lo escribe este servicio en la ruta; se lo pide al participante de rutas, que suma los
+        // minutos, deja la ruta Retrasada y avisa al mediador. El efecto es el de siempre (ver FleetLifecycleMediator).
         if (alert.DelayMinutes > 0)
-        {
-            route.DelayMinutes += alert.DelayMinutes;
-            route.Status = DeliveryRouteStatus.Delayed;
-            await _routeRepository.UpdateAsync(route);
-        }
+            await _routeLifecycle.ReportDelayAsync(route, alert.DelayMinutes);
 
         _auditLogger.LogEvent("Alerta", $"Nueva alerta '{type}' en la ruta '{route.Name}': {request.Description}");
 
