@@ -6,6 +6,7 @@ using FleetManagement.Application.Notifications;
 using FleetManagement.Application.Notifications.Decorators;
 using FleetManagement.Domain.Entities;
 using FleetManagement.Domain.Enums;
+using FleetManagement.Domain.States;
 
 namespace FleetManagement.Application.Services;
 
@@ -18,6 +19,10 @@ namespace FleetManagement.Application.Services;
 /// <see cref="MaintenanceNotification"/> (Abstracción refinada) y la envía a
 /// través de <see cref="INotificationChannel"/> (Implementor), sin conocer
 /// cómo se realiza el envío concreto (correo, SMS, push).
+///
+/// PATRÓN STATE: registrar un mantenimiento saca del taller al vehículo que estaba en Mantenimiento. Esa regla ya no es un
+/// <c>if</c> sobre el estado escrito aquí: la aplica el propio estado del vehículo
+/// (<see cref="VehicleStateContext.CompleteMaintenance"/>), igual que el resto de cambios de estado.
 /// </summary>
 public class MaintenanceService : IMaintenanceService
 {
@@ -28,19 +33,22 @@ public class MaintenanceService : IMaintenanceService
     private readonly IDriverRepository _driverRepository;
     private readonly IFleetAuditLogger _auditLogger;
     private readonly INotificationChannel _notificationChannel;
+    private readonly IVehicleStateResolver _vehicleStates;                       // State
 
     public MaintenanceService(
         IMaintenanceRepository maintenanceRepository,
         IVehicleRepository vehicleRepository,
         IDriverRepository driverRepository,
         IFleetAuditLogger auditLogger,
-        INotificationChannel notificationChannel)
+        INotificationChannel notificationChannel,
+        IVehicleStateResolver? vehicleStates = null)
     {
         _maintenanceRepository = maintenanceRepository;
         _vehicleRepository = vehicleRepository;
         _driverRepository = driverRepository;
         _auditLogger = auditLogger;
         _notificationChannel = notificationChannel;
+        _vehicleStates = vehicleStates ?? VehicleStateResolver.Default;
     }
 
     public async Task<IReadOnlyList<MaintenanceRecordDto>> GetAllAsync()
@@ -78,8 +86,7 @@ public class MaintenanceService : IMaintenanceService
         var saved = await _maintenanceRepository.AddAsync(record);
 
         vehicle.LastMaintenanceDate = request.PerformedAt;
-        if (vehicle.Status == VehicleStatus.Maintenance)
-            vehicle.Status = VehicleStatus.Available;
+        new VehicleStateContext(vehicle, _vehicleStates).CompleteMaintenance();   // un vehículo en el taller sale de él; los demás no cambian
         await _vehicleRepository.UpdateAsync(vehicle);
 
         _auditLogger.LogEvent("Mantenimiento", $"Registrado mantenimiento '{type}' para el vehículo {vehicle.LicensePlate}.");

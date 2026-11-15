@@ -2,6 +2,7 @@ using FleetManagement.Api.Filters;
 using FleetManagement.Application.DTOs;
 using FleetManagement.Application.Interfaces.Services;
 using FleetManagement.Domain.Enums;
+using FleetManagement.Domain.States;
 using Microsoft.AspNetCore.Mvc;
 
 namespace FleetManagement.Api.Controllers;
@@ -92,6 +93,10 @@ public class FleetController : ControllerBase
             return NotFound(new { message = ex.Message });
         }
         catch (ArgumentException ex)
+        {
+            return BadRequest(new { message = ex.Message });
+        }
+        catch (InvalidVehicleTransitionException ex) // el estado actual del vehículo no permite pasar al pedido (patrón State)
         {
             return BadRequest(new { message = ex.Message });
         }

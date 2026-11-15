@@ -6,9 +6,12 @@ con sistemas de navegación. Incluye autenticación con dos roles (Administrador
 Operador), un dashboard administrativo y un portal para conductores.
 
 > Construido como ejercicio de **Clean Architecture**, **SOLID** y **patrones de
-> diseño creacionales** (Singleton, Factory Method, Abstract Factory, Builder y
-> Prototype) sobre **C# / .NET 8**, con un frontend en HTML + CSS + JavaScript
-> puro (sin frameworks) y mapas con **Leaflet.js**.
+> diseño** sobre **C# / .NET 8**, con un frontend en HTML + CSS + JavaScript puro
+> (sin frameworks) y mapas con **Leaflet.js**. Los 21 patrones están en la
+> [sección 8](#8-patrones-de-diseño): creacionales (Singleton, Factory Method, Abstract
+> Factory, Builder, Prototype), estructurales (Adapter, Bridge, Composite, Decorator,
+> Facade, Flyweight, Proxy) y de comportamiento (Strategy, Chain of Responsibility,
+> Command, Iterator, Mediator, Memento, **Observer, State y Visitor**).
 
 ---
 
@@ -39,6 +42,9 @@ Operador), un dashboard administrativo y un portal para conductores.
    - [8.15 Iterator — recorrer la carga de una ruta sin conocer su estructura](#815-iterator--recorrer-la-carga-de-una-ruta-sin-conocer-su-estructura)
    - [8.16 Mediator — coordinar el estado de la ruta con el del vehículo](#816-mediator--coordinar-el-estado-de-la-ruta-con-el-del-vehículo)
    - [8.17 Memento — volver al orden anterior de las paradas](#817-memento--volver-al-orden-anterior-de-las-paradas)
+   - [8.18 Observer — publicar la telemetría del recorrido sin que el simulador sepa quién escucha](#818-observer--publicar-la-telemetría-del-recorrido-sin-que-el-simulador-sepa-quién-escucha)
+   - [8.19 State — qué puede hacer un vehículo según su estado](#819-state--qué-puede-hacer-un-vehículo-según-su-estado)
+   - [8.20 Visitor — analizar la flota sin cargar las entidades con análisis](#820-visitor--analizar-la-flota-sin-cargar-las-entidades-con-análisis)
 9. [Documentación de la API REST](#9-documentación-de-la-api-rest)
 10. [Notas sobre paso a producción](#10-notas-sobre-paso-a-producción)
 11. [Limitaciones conocidas del prototipo](#11-limitaciones-conocidas-del-prototipo)
@@ -50,7 +56,7 @@ Operador), un dashboard administrativo y un portal para conductores.
 
 | # | Módulo | Requerimiento | Dónde vive |
 |---|--------|----------------|------------|
-| 1 | **Monitoreo en tiempo real** | Ver ubicación y estado de cada vehículo (disponible / en ruta / mantenimiento / fuera de servicio) y su avance sobre la ruta asignada | `FleetController` + `TripProgressController` + `VehicleSimulationBackgroundService` + pestaña "Mapa y vehículos" del dashboard |
+| 1 | **Monitoreo en tiempo real** | Ver ubicación y estado de cada vehículo (disponible / en ruta / mantenimiento / fuera de servicio) y su avance sobre la ruta asignada | `FleetController` + `TripProgressController` + `VehicleSimulationBackgroundService` + pestaña "Mapa y vehículos" del dashboard; la telemetría que publica la simulación la reciben observadores y la consulta `MonitoringController` (**Observer**, [8.18](#818-observer--publicar-la-telemetría-del-recorrido-sin-que-el-simulador-sepa-quién-escucha)) y el estado operativo de cada vehículo lo gobiernan sus estados (**State**, [8.19](#819-state--qué-puede-hacer-un-vehículo-según-su-estado)) |
 | 2 | **Optimización de rutas y asignación de cargas** | Crear rutas con paradas y artículos de carga y asignar vehículo/conductor **respetando las reglas** (capacidad en kg y m³, disponibilidad, mantenimiento vencido, sin doble asignación); **reordenar las paradas** de una ruta para recorrer menos kilómetros; **repartir un lote de entregas** entre los vehículos disponibles con un plan que se compara con el reparto simple; estimar distancia y tiempo con la velocidad del tipo de vehículo | `DeliveryRoutesController` + `DeliveryRouteService` (**Builder**) + `AssignmentValidatingRouteService` (**Decorator**, [8.12](#812-decorator--reglas-de-asignación-sobre-el-servicio-de-rutas)) + `DispatchController` y `RouteOptimizationController` (**Strategy**, [8.11](#811-strategy--optimizar-paradas-y-repartir-cargas)) + pestaña "Rutas y cargas" (botones "🧭 Planificar reparto" y "🧭 Optimizar") |
 | 3 | **Mantenimiento predictivo** | Registrar mantenimientos y detectar cuáles vehículos tienen tareas vencidas por fecha o kilometraje | `MaintenanceController` + `MaintenanceService.GetVehiclesDueForMaintenanceAsync()` + pestaña "Mantenimiento" |
 | 4 | **Integración con sistemas de navegación** | El conductor puede abrir la ruta asignada en una app de navegación real | `NavigationController` + `NavigationService` (genera enlace de Google Maps) + botón "Abrir navegación" en el portal del operador |
@@ -60,6 +66,7 @@ Además, el sistema incluye:
 - **Autenticación con roles** (`AuthController`, `AuthService`) — Administrador y Operador.
 - **Dashboard administrativo** de una sola página (SPA) con mapa, gestión de vehículos, rutas, mantenimiento, alertas y auditoría.
 - **Portal del operador**: el conductor ve su ruta asignada, la carga a transportar, puede reportar una complicación durante el viaje (avería, retraso, tráfico, accidente, clima) y abrir la navegación externa.
+- **Análisis de la flota** (`AnalysisController`, `FleetAnalysisService`): utilización de los vehículos, recorridos y distancias, historial de mantenimiento y hallazgos operativos, calculados por visitantes sobre los datos reales (**Visitor**, [8.20](#820-visitor--analizar-la-flota-sin-cargar-las-entidades-con-análisis)). Solo lectura y sin pantalla propia en el frontend: se consulta por la API.
 
 ---
 
@@ -123,11 +130,12 @@ FleetManagementSystem/
 │   │   ├── Entities/ (Vehicle, DeliveryRoute, Driver, AppUser, Waypoint,
 │   │   │              CargoItem, MaintenanceRecord, MaintenancePlan,
 │   │   │              NavigationProfile, TripAlert)
+│   │   ├── States/     ← STATE: los cuatro estados operativos del vehículo, su contexto y las reglas de transición (sección 8.19)
 │   │   └── Enums/Enums.cs
 │   │
 │   ├── FleetManagement.Application/
 │   │   ├── Interfaces/Repositories/ (6 interfaces — DIP)
-│   │   ├── Interfaces/Services/ (13 interfaces — DIP)
+│   │   ├── Interfaces/Services/ (14 interfaces — DIP)
 │   │   ├── Interfaces/ (IFleetAuditLogger, IPasswordHasher, ISessionTokenStore)
 │   │   ├── DTOs/ (records de entrada/salida de la API)
 │   │   ├── Factories/  ← FACTORY METHOD + ABSTRACT FACTORY
@@ -140,6 +148,8 @@ FleetManagementSystem/
 │   │   ├── Optimization/ ← STRATEGY: orden de las paradas, reparto de entregas y secuencia de cada viaje (sección 8.11)
 │   │   ├── Commands/   ← COMMAND: órdenes que se pueden deshacer y rehacer, su invocador y el historial por usuario (sección 8.13); y el MEMENTO del orden de las paradas (sección 8.17)
 │   │   ├── Mediators/  ← MEDIATOR: coordina el estado de la ruta con el de su vehículo (sección 8.16)
+│   │   ├── Monitoring/ ← OBSERVER: eventos de telemetría, publicador, observadores y tablero en vivo (sección 8.18)
+│   │   ├── Analysis/   ← VISITOR: elementos adaptadores, estructura de objetos y los cuatro visitantes de análisis (sección 8.20)
 │   │   ├── AlertHandling/ ← CHAIN OF RESPONSIBILITY: validar, registrar, clasificar y escalar una alerta (sección 8.14)
 │   │   ├── Simulation/ ← simulación del recorrido sobre la ruta asignada (secciones 5.3 y 10)
 │   │   ├── Flyweights/ ← FLYWEIGHT: perfil compartido por tipo de vehículo (sección 8.9)
@@ -156,7 +166,7 @@ FleetManagementSystem/
 │   │
 │   └── FleetManagement.Api/
 │       ├── Program.cs                 ← Composition Root (Inyección de Dependencias)
-│       ├── Controllers/ (16 controladores REST)
+│       ├── Controllers/ (18 controladores REST: los 16 de siempre + MonitoringController y AnalysisController)
 │       ├── Middleware/TokenAuthenticationMiddleware.cs
 │       └── Filters/RequireRoleAttribute.cs
 │
@@ -170,7 +180,10 @@ FleetManagementSystem/
 │       ├── AlertHandling/ ← Chain of Responsibility: cadena, manejadores, política de gravedad, opciones y decorador (sección 8.14)
 │       ├── Iterator/      ← Iterator: recorrido de la carga y lista plana de artículos (sección 8.15)
 │       ├── Mediator/      ← Mediator: participantes, reglas ruta-vehículo, diseño e integración con servicios reales (sección 8.16)
-│       └── Memento/       ← Memento: recuerdo, restauración, rechazos y su uso desde Command (sección 8.17)
+│       ├── Memento/       ← Memento: recuerdo, restauración, rechazos y su uso desde Command (sección 8.17)
+│       ├── Observer/      ← Observer: publicador, observadores, tablero, eventos del simulador y diseño (sección 8.18)
+│       ├── State/         ← State: estados, transiciones, compatibilidad con el Mediator y con los servicios reales (sección 8.19)
+│       └── Visitor/       ← Visitor: elementos, estructura, los cuatro visitantes, servicio de análisis y diseño (sección 8.20)
 │
 └── frontend/
     ├── login.html
@@ -303,9 +316,12 @@ iteraciones, sal aleatoria por usuario) — ver `Infrastructure/Security/Passwor
 
 ## 8. Patrones de diseño
 
-Los cinco patrones solicitados están implementados, **conectados a un caso de uso
-real** (no como código de ejemplo aislado) y expuestos a través de la API y la
-interfaz gráfica, para que se puedan ejercitar de punta a punta.
+Los patrones están implementados, **conectados a un caso de uso real** (no como código de
+ejemplo aislado) y expuestos a través de la API —y, cuando corresponde, de la interfaz
+gráfica— para que se puedan ejercitar de punta a punta. Las secciones 8.1 a 8.5 son los cinco
+creacionales; de la 8.7 a la 8.17 los estructurales y los patrones de comportamiento anteriores; y
+las **8.18, 8.19 y 8.20** incorporan **Observer, State y Visitor** sin reemplazar ninguno de los
+anteriores.
 
 ### 8.1 Singleton — `FleetAuditLogger`
 
@@ -594,6 +610,9 @@ pasan de "volver a diligenciar todos los campos" a "clonar y ajustar dos datos".
 | Iterator (`ICargoIterator` + `CargoDepthFirstIterator`) | `GET /api/routes/{id}/cargo-items` (los mismos artículos del `cargo-manifest`, como lista plana en el orden del recorrido) | — |
 | Mediator (`IFleetLifecycleMediator` + `IRouteColleague` / `IVehicleColleague`) | `PATCH /api/routes/{id}/status` (el vehículo asignado queda En ruta o Disponible según el estado) y `POST /api/alerts` con retraso (la ruta queda Retrasada) | Cambio de estado de la ruta y «🚨 Reportar complicación» |
 | Memento (`IRouteMemento` / `RouteSnapshot` + `IRouteSnapshotService`) | `POST /api/commands/routes/{id}/optimization` guarda el recuerdo; `POST /api/commands/undo` y `POST /api/commands/redo` lo usan | «Aplicar este orden», «↶ Deshacer» y «↷ Rehacer» |
+| Observer (`ITelemetryPublisher` / `ITelemetryObserver` + `VehicleTelemetryPublisher`) | `GET /api/monitoring/telemetry` y `GET /api/monitoring/telemetry/{vehicleId}` (lo último que publicó el simulador de cada vehículo); las paradas alcanzadas quedan en `GET /api/audit/logs` (categoría «Telemetría») | — |
+| State (`IVehicleState` + `VehicleStateContext` + los cuatro estados) | `PATCH /api/fleet/vehicles/{id}/status` (responde 400 si el estado actual no permite el cambio), `POST /api/maintenance` (un vehículo en Mantenimiento sale del taller), `PATCH /api/routes/{id}/status` y `POST /api/routes` (el estado decide qué hace el vehículo al empezar o terminar el viaje y si puede usarse) | Cambio de estado del vehículo y de la ruta |
+| Visitor (`IFleetVisitor` / `IFleetElement` + `FleetElementStructure`) | `GET /api/analysis/fleet` (utilización, recorridos y distancias, historial de mantenimiento y hallazgos operativos) | — |
 
 ### 8.7 Patrones estructurales: Adapter, Bridge, Composite y Decorator
 
@@ -1650,6 +1669,1340 @@ POST /api/commands/undo                         → paradas A→B→C · 155.67 
 POST /api/commands/redo                         → paradas B→C→A · 66.72 km · 72.8 min
 ```
 
+
+### 8.18 Observer — publicar la telemetría del recorrido sin que el simulador sepa quién escucha
+
+Cada paso de la simulación mueve a los vehículos que están en viaje. Hasta ahora, quien quería enterarse de ese movimiento tenía que
+**preguntarlo** (`TripProgressService` calcula el avance de los viajes activos cuando se le consulta) y nada dejaba constancia de los
+hitos del recorrido (paradas alcanzadas) ni conservaba lo último que se supo de un vehículo cuando su viaje terminaba. Agregar eso
+dentro de `VehicleMovementSimulator` habría hecho que el simulador conociera la auditoría y cualquier consumidor futuro. El
+**Observer** invierte esa dependencia: el simulador **publica** eventos de telemetría y los observadores registrados los reciben
+sin que el simulador sepa cuántos son ni qué hacen.
+
+#### 1. Descripción del patrón
+
+Observer define una dependencia de uno a muchos: cuando el **sujeto** (*Subject*) publica un evento, todos los **observadores**
+(*Observers*) registrados lo reciben automáticamente. El sujeto solo conoce la interfaz del observador; los observadores se registran
+y se retiran en tiempo de ejecución. Aquí el sujeto es `VehicleTelemetryPublisher`, los eventos son los tres hitos de un recorrido
+(movimiento, parada alcanzada y llegada) y los observadores concretos son el auditor de paradas (`TripAuditObserver`) y el tablero
+en vivo (`LiveTelemetryBoard`).
+
+#### 2. Justificación de su utilización
+
+| Problema real del proyecto | Cómo lo resuelve el Observer |
+|----------------------------|------------------------------|
+| Solo el simulador sabe cuándo termina el paso de un viaje y qué recorrió; quien quiera reaccionar tendría que ser llamado desde él | El simulador publica **un** evento por hito y no conoce a los consumidores (`ITelemetryPublisher.Publish`). |
+| Hay dos consumidores con responsabilidades distintas (dejar constancia de las paradas y mantener lo último conocido de cada vehículo) y puede haber más | Cada uno es un observador independiente; agregar otro es registrarlo en `Program.cs`, sin tocar al publicador ni al simulador (Open/Closed). |
+| `TripProgressService` solo informa los viajes **activos** y recalcula en cada consulta | El tablero guarda lo **último publicado**: sigue visible al terminar el viaje (`arrived: true`) y recuerda la última parada alcanzada, sin leer repositorios. |
+| Un observador que falla, o que publica a su vez, no debe detener la simulación ni provocar bucles | El publicador aísla los fallos (los audita), serializa la entrega con una cola y corta los ciclos. |
+
+**Qué le toca a cada patrón (no se duplican responsabilidades):**
+
+| Patrón | Responsabilidad que **conserva** | Qué hace el Observer en esa frontera |
+|--------|----------------------------------|--------------------------------------|
+| **Bridge** ([8.7](#87-patrones-estructurales-adapter-bridge-composite-y-decorator)) | Separar las notificaciones de sus canales de envío (correo, SMS, push). | Nada: no envía mensajes ni conoce canales. Ningún observador usa `INotificationChannel`. |
+| **Mediator** ([8.16](#816-mediator--coordinar-el-estado-de-la-ruta-con-el-del-vehículo)) | Coordinar el estado de la ruta con el del vehículo. | Nada: no cambia estados ni coordina participantes. Los observadores solo **reciben** hechos ya ocurridos. |
+| **Observer** | Distribuir los eventos de monitoreo del recorrido. | Es lo único que hace. |
+
+#### 3. Ubicación de la implementación
+
+| Archivo | Qué contiene |
+|---------|--------------|
+| `src/FleetManagement.Application/Monitoring/TelemetryEvents.cs` | El evento base `TelemetryEvent` y sus tres tipos: `VehicleMovedEvent`, `TripStopReachedEvent`, `TripArrivedEvent` (records inmutables). |
+| `src/FleetManagement.Application/Monitoring/ITelemetryObserver.cs` | Contrato del observador (un solo método). |
+| `src/FleetManagement.Application/Monitoring/ITelemetryPublisher.cs` | Lado del sujeto que usa el simulador: solo publicar. |
+| `src/FleetManagement.Application/Monitoring/ITelemetrySubject.cs` | Lado del sujeto que registra observadores: `Subscribe`, `Unsubscribe`, `ObserverCount`. |
+| `src/FleetManagement.Application/Monitoring/VehicleTelemetryPublisher.cs` | El sujeto concreto: registro, cola de entrega, aislamiento de fallos, corte de ciclos. |
+| `src/FleetManagement.Application/Monitoring/TripAuditObserver.cs` | Observador concreto 1: deja en la auditoría cada parada alcanzada. |
+| `src/FleetManagement.Application/Monitoring/LiveTelemetryBoard.cs` y `ILiveTelemetryBoard.cs` | Observador concreto 2 y modelo de lectura que consulta la API. |
+| `src/FleetManagement.Application/Simulation/TripTelemetryEvents.cs` | Función pura que traduce un paso de la simulación en sus eventos. |
+| `src/FleetManagement.Application/DTOs/TelemetryDtos.cs` | `VehicleLiveStatusDto`: lo que devuelve la API. |
+| `src/FleetManagement.Api/Controllers/MonitoringController.cs` | `GET api/monitoring/telemetry` y `GET api/monitoring/telemetry/{vehicleId}`. |
+| **Modificados:** `src/FleetManagement.Application/Simulation/VehicleMovementSimulator.cs`, `src/FleetManagement.Api/Program.cs` | Ver la sección 7 de este apartado (cambios mínimos y compatibles). |
+| Pruebas: `tests/FleetManagement.Application.Tests/Observer/` | 6 archivos de pruebas y `ObserverTestDoubles.cs` (dobles escritos a mano). |
+
+#### 4. Diagrama UML
+
+```mermaid
+classDiagram
+    direction LR
+    class ITelemetryPublisher {
+        <<interface>>
+        +Publish(telemetry)
+    }
+    class ITelemetrySubject {
+        <<interface>>
+        +ObserverCount int
+        +Subscribe(observer) IDisposable
+        +Unsubscribe(observer) bool
+    }
+    class VehicleTelemetryPublisher {
+        <<sealed>>
+        +MaxReentrantPublishes int
+        -observers copia inmutable
+        -pending ConcurrentQueue
+    }
+    class ITelemetryObserver {
+        <<interface>>
+        +OnTelemetry(telemetry)
+    }
+    class TripAuditObserver {
+        <<sealed>>
+    }
+    class LiveTelemetryBoard {
+        <<sealed>>
+    }
+    class ILiveTelemetryBoard {
+        <<interface>>
+        +GetAll() IReadOnlyList
+        +Get(vehicleId) VehicleLiveStatusDto
+    }
+    class TelemetryEvent {
+        <<abstract record>>
+        +VehicleId
+        +LicensePlate
+        +RouteId
+        +OccurredAt
+    }
+    class VehicleMovedEvent {
+        <<record>>
+    }
+    class TripStopReachedEvent {
+        <<record>>
+    }
+    class TripArrivedEvent {
+        <<record>>
+    }
+    class TripTelemetryEvents {
+        <<static>>
+        +ForStep(trip, path, speed, previousKm, currentKm, at)
+    }
+    class VehicleMovementSimulator
+    class MonitoringController
+    class IFleetAuditLogger {
+        <<interface>>
+    }
+    ITelemetryPublisher <|.. VehicleTelemetryPublisher
+    ITelemetrySubject <|.. VehicleTelemetryPublisher
+    ITelemetryObserver <|.. TripAuditObserver
+    ITelemetryObserver <|.. LiveTelemetryBoard
+    ILiveTelemetryBoard <|.. LiveTelemetryBoard
+    TelemetryEvent <|-- VehicleMovedEvent
+    TelemetryEvent <|-- TripStopReachedEvent
+    TelemetryEvent <|-- TripArrivedEvent
+    VehicleTelemetryPublisher o-- ITelemetryObserver : notifica a todos
+    VehicleMovementSimulator --> ITelemetryPublisher : publica
+    VehicleMovementSimulator ..> TripTelemetryEvents : pide los eventos del paso
+    TripAuditObserver --> IFleetAuditLogger
+    MonitoringController --> ILiveTelemetryBoard : consulta
+```
+
+```mermaid
+sequenceDiagram
+    participant S as VehicleMovementSimulator
+    participant E as TripTelemetryEvents
+    participant P as VehicleTelemetryPublisher
+    participant A as TripAuditObserver
+    participant B as LiveTelemetryBoard
+    participant API as GET api/monitoring/telemetry
+    S->>S: guarda el movimiento y, si llegó, completa la ruta
+    S->>E: ForStep(viaje, poligonal, velocidad, km antes, km después, hora)
+    E-->>S: [movimiento, parada alcanzada, llegada]
+    loop cada evento, en ese orden
+        S->>P: Publish(evento)
+        P->>A: OnTelemetry(evento)
+        A->>A: si es una parada, audita «El vehículo ... alcanzó la parada ...»
+        P->>B: OnTelemetry(evento)
+        B->>B: reemplaza la entrada del vehículo (registro inmutable)
+    end
+    API->>B: GetAll()
+    B-->>API: última telemetría de cada vehículo, por placa
+```
+
+#### 5. Interfaces y clases participantes
+
+| Rol del patrón | Clase o interfaz | Responsabilidad |
+|----------------|------------------|-----------------|
+| **Subject** (lado de publicar) | `ITelemetryPublisher` | Lo único que necesita quien emite telemetría: `Publish`. El simulador depende de esta interfaz y no puede registrar ni retirar observadores. |
+| **Subject** (lado de registrar) | `ITelemetrySubject` | Registrar (`Subscribe`, devuelve un `IDisposable`), retirar (`Unsubscribe`) y contar observadores. Segregado del anterior (ISP). |
+| **Concrete Subject** | `VehicleTelemetryPublisher` | Guarda el registro de observadores y les distribuye cada evento. No decide qué hace cada observador, no envía notificaciones por canales ni coordina vehículos con rutas. |
+| **Observer** | `ITelemetryObserver` | `OnTelemetry(TelemetryEvent)`: un solo método. Cada observador decide por tipo qué eventos le interesan. |
+| **Concrete Observer 1** | `TripAuditObserver` | Audita únicamente las paradas alcanzadas (categoría «Telemetría»). No audita cada movimiento (llenaría el historial, que guarda 1000 eventos) ni la llegada (`DeliveryRouteService` ya audita «Ruta … cambió su estado a Completed»). |
+| **Concrete Observer 2** | `LiveTelemetryBoard` | Mantiene la última telemetría conocida de cada vehículo (`ConcurrentDictionary` de registros inmutables). Es además el modelo de lectura (`ILiveTelemetryBoard`) que consulta la API. |
+| **Event** | `TelemetryEvent` y `VehicleMovedEvent`, `TripStopReachedEvent`, `TripArrivedEvent` | Lo que se comunica: posición GPS simulada, kilometraje y progreso; parada alcanzada; llegada. Inmutables: todos los observadores reciben la misma instancia y ninguno puede alterarla para los demás. |
+| **Productor de eventos** | `TripTelemetryEvents.ForStep` | Traduce un paso de la simulación en sus eventos, con los mismos números que usa `TripProgressService` (`RoutePath.ProgressAt`). Es una función pura. |
+| **Cliente del sujeto** | `VehicleMovementSimulator` | Publica al terminar el paso de cada viaje. |
+| **Consulta** | `MonitoringController` | Lee `ILiveTelemetryBoard`; no publica ni se suscribe. |
+
+#### 6. Funcionamiento dentro del sistema
+
+**Qué se publica y cuándo.** Al terminar el paso de un viaje activo, el simulador publica, en este orden: (1) `VehicleMovedEvent`
+—posición, kilometraje, progreso, próxima parada, km restantes y ETA—; (2) un `TripStopReachedEvent` por cada parada
+intermedia que el vehículo cruzó en ese paso, en el orden del recorrido; (3) si llegó, un `TripArrivedEvent`. La publicación ocurre
+**después** de guardar el movimiento y de completar la ruta, de modo que un observador nunca ve algo que todavía no está guardado.
+
+```csharp
+// VehicleMovementSimulator.cs — al final de AdvanceTripAsync, después de guardar el movimiento y de completar la ruta
+// Se publica al final: solo se informa un paso que se completó (si la ruta no pudo completarse no hay llegada que avisar).
+PublishTelemetry(trip, path, speedKmh, previousKm, currentKm);
+
+private void PublishTelemetry(ActiveTrip trip, RoutePath path, double speedKmh, double previousKm, double currentKm)
+{
+    if (_telemetry is null)
+        return;
+
+    foreach (var telemetry in TripTelemetryEvents.ForStep(trip, path, speedKmh, previousKm, currentKm, _clock.GetUtcNow()))
+        _telemetry.Publish(telemetry);
+}
+```
+
+**Cómo evita los problemas típicos del patrón** (todos comprobados con pruebas, ver el punto 9):
+
+| Riesgo | Cómo se evita |
+|--------|---------------|
+| **Suscripciones duplicadas** | Un observador queda registrado una sola vez, comparado **por referencia**: suscribirlo de nuevo no le duplica los eventos. Dos instancias distintas del mismo tipo sí son dos observadores. |
+| **Suscripciones que nunca se liberan** | `Subscribe` devuelve un `IDisposable` que lo retira (una sola vez, aunque se libere dos veces). Además los observadores de la aplicación viven lo mismo que el publicador (ambos Singleton), así que no queda ninguno huérfano. |
+| **Notificaciones recursivas** | Los eventos pasan por una cola y los entrega **un solo hilo a la vez**. Si un observador publica mientras recibe un evento, el nuevo evento espera en la cola y se entrega al terminar el actual: la pila no crece. Si los observadores se publican eventos entre sí más de `MaxReentrantPublishes` (1000) veces en una misma entrega (un ciclo), se descarta el exceso y se deja constancia en la auditoría (categoría «Monitoreo»). |
+| **Concurrencia** | El registro es una **copia inmutable** que se reemplaza completa (copy-on-write): quien publica recorre la copia que leyó, sin candados (solo registrar y retirar usan un candado corto entre sí), y un observador puede suscribir o retirar a otro mientras recibe un evento sin romper la entrega en curso. Al haber un solo hilo entregando, ningún observador recibe dos eventos a la vez ni desordenados, y no necesita sincronizar su propio estado. El tablero usa un `ConcurrentDictionary` y reemplaza cada valor completo, así que un lector nunca ve un vehículo a medio actualizar. |
+| **Un observador que falla** | La excepción se aísla: los demás reciben el evento, la simulación sigue y el fallo queda en la auditoría con el nombre del observador, el tipo de evento y el vehículo. Si ni siquiera se puede auditar, se descarta sin detener nada. |
+| **Dependencias circulares** | `Monitoring` solo depende de `IFleetAuditLogger` y de `VehicleLiveStatusDto`; no conoce `Simulation`. El simulador conoce a `Monitoring` (un solo sentido) y los observadores no dependen del publicador. |
+
+```csharp
+// VehicleTelemetryPublisher.cs — registro sin duplicados (por referencia) y entrega en cola, un solo hilo a la vez
+public IDisposable Subscribe(ITelemetryObserver observer)
+{
+    ArgumentNullException.ThrowIfNull(observer);
+
+    lock (_registryLock)
+    {
+        if (!IsRegistered(_observers, observer))
+            Volatile.Write(ref _observers, _observers.Append(observer).ToArray());
+    }
+
+    return new Subscription(this, observer);
+}
+
+public void Publish(TelemetryEvent telemetry)
+{
+    ArgumentNullException.ThrowIfNull(telemetry);
+
+    if (IsCalledByAnObserver() && ++_reentrantPublishes > MaxReentrantPublishes)
+    {
+        ReportFailure(
+            $"Se descartó un evento {telemetry.GetType().Name} del vehículo {telemetry.LicensePlate}: los observadores publicaron " +
+            $"más de {MaxReentrantPublishes} eventos como reacción a otros (posible ciclo de notificaciones).");
+        return;
+    }
+
+    _pending.Enqueue(telemetry);
+    DeliverPending();
+}
+
+private void DeliverPending()
+{
+    var thisThread = Environment.CurrentManagedThreadId;
+
+    while (!_pending.IsEmpty)
+    {
+        if (Interlocked.CompareExchange(ref _delivererThreadId, thisThread, 0) != 0)
+            return;
+
+        try
+        {
+            while (_pending.TryDequeue(out var next))
+                Deliver(next);
+        }
+        finally
+        {
+            _reentrantPublishes = 0;
+            Volatile.Write(ref _delivererThreadId, 0);
+        }
+    }
+}
+
+private void Deliver(TelemetryEvent telemetry)
+{
+    // Se recorre la copia que había al empezar: registrar o retirar observadores durante la entrega no la altera.
+    foreach (var observer in Volatile.Read(ref _observers))
+    {
+        try
+        {
+            observer.OnTelemetry(telemetry);
+        }
+        catch (Exception failure)
+        {
+            ReportFailure($"El observador {observer.GetType().Name} falló al recibir {telemetry.GetType().Name} del vehículo {telemetry.LicensePlate}: {failure.Message}");
+        }
+    }
+}
+```
+
+**Los observadores concretos.** `TripAuditObserver` filtra por tipo y deja una línea por parada; `LiveTelemetryBoard` reemplaza la
+entrada del vehículo con cada movimiento (y conserva la última parada **solo dentro del mismo viaje**), marca `arrived` con la
+llegada y no inventa una posición si recibe una parada o una llegada de un vehículo que todavía no vio moverse.
+
+```csharp
+// TripAuditObserver
+public void OnTelemetry(TelemetryEvent telemetry)
+{
+    if (telemetry is not TripStopReachedEvent stop)
+        return;
+
+    var percent = stop.ProgressPercent.ToString("0.#", CultureInfo.InvariantCulture);
+    _audit.LogEvent(AuditCategory, $"El vehículo {stop.LicensePlate} alcanzó la parada '{stop.StopLabel}' ({percent} % del recorrido).");
+}
+```
+
+**Agregar un observador nuevo** (por ejemplo, uno que cuente kilómetros por día) es escribir una clase que implemente
+`ITelemetryObserver` y registrarla con una línea en `Program.cs`. No se modifica el publicador, el simulador ni los observadores existentes.
+
+#### 7. Integración con los demás componentes
+
+**Cambios en archivos existentes** (los únicos, mínimos y compatibles):
+
+| Archivo | Cambio | Por qué era necesario |
+|---------|--------|-----------------------|
+| `Application/Simulation/VehicleMovementSimulator.cs` | Dos parámetros **opcionales al final** del constructor (`ITelemetryPublisher? telemetry = null`, `TimeProvider? clock = null`) y una llamada a `PublishTelemetry` al terminar el paso. | Es el único lugar que sabe cuándo un paso termina; sin esta llamada no habría quién publique. Con los valores por omisión se comporta **exactamente como antes** (una prueba lo fija) y las pruebas existentes que lo construyen compilan sin cambios. |
+| `Api/Program.cs` | El bloque de registro de la sección «OBSERVER» (ver abajo). | Es la raíz de composición. No se eliminó ni se reemplazó ningún registro. |
+
+**Registro en `Program.cs`** (cada ciclo de vida está justificado en el propio código):
+
+```csharp
+builder.Services.AddSingleton<VehicleTelemetryPublisher>();
+builder.Services.AddSingleton<ITelemetryPublisher>(provider => provider.GetRequiredService<VehicleTelemetryPublisher>());
+builder.Services.AddSingleton<ITelemetrySubject>(provider => provider.GetRequiredService<VehicleTelemetryPublisher>());
+builder.Services.AddSingleton<ITelemetryObserver, TripAuditObserver>();
+builder.Services.AddSingleton<LiveTelemetryBoard>();
+builder.Services.AddSingleton<ITelemetryObserver>(provider => provider.GetRequiredService<LiveTelemetryBoard>());
+builder.Services.AddSingleton<ILiveTelemetryBoard>(provider => provider.GetRequiredService<LiveTelemetryBoard>());
+```
+
+| Registro | Ciclo de vida | Por qué |
+|----------|---------------|---------|
+| `VehicleTelemetryPublisher` (y sus dos interfaces) | **Singleton** | Guarda el registro de observadores y la cola de entrega, que deben ser **únicos** y sobrevivir a cada paso de la simulación (el simulador es Scoped y se crea de nuevo en cada paso). Las dos interfaces resuelven **la misma instancia**: no hay duplicados. |
+| `TripAuditObserver` | **Singleton** | Sin estado y solo depende de `IFleetAuditLogger` (Singleton): no captura ninguna dependencia de vida más corta. |
+| `LiveTelemetryBoard` (como observador y como `ILiveTelemetryBoard`) | **Singleton** | Su estado debe ser único y compartido entre el paso de la simulación (escribe) y las peticiones HTTP (leen). Se registra **una vez** y se expone por sus dos interfaces. |
+| Los observadores como `IEnumerable<ITelemetryObserver>` | (los recibe el publicador al construirse) | El publicador recibe **todos** los registrados y los suscribe al construirse: agregar un observador es registrarlo. Los observadores no dependen del publicador (no hay ciclo). |
+
+**Qué no cambió.**
+
+- **Bridge y Decorators de notificación:** siguen siendo los únicos que envían mensajes por canales; la telemetría no genera ningún aviso.
+- **Mediator:** el cambio de estado de la ruta y del vehículo sigue siendo suyo. La llegada la completa `DeliveryRouteService` (que audita «cambió su estado a Completed»); por eso el observador de auditoría **no** repite la llegada.
+- **`TripProgressService` y `GET /api/progress`:** no se tocaron; siguen siendo la consulta por demanda de los viajes activos. El tablero añade lo que esa consulta no tiene (lo último publicado sigue visible al terminar el viaje) y redondea igual, así que las dos nunca se contradicen (una prueba lo comprueba en cada paso del viaje).
+- **`FleetController`, `TripProgressController`, la simulación (`VehicleSimulationBackgroundService`) y la auditoría (Singleton):** sin cambios. Los controladores nuevos son aparte.
+
+#### 8. Principios SOLID aplicados
+
+| Principio | Cómo se cumple |
+|-----------|----------------|
+| **S** — Responsabilidad única | Una clase por motivo de cambio: publicar y entregar (`VehicleTelemetryPublisher`), traducir un paso en eventos (`TripTelemetryEvents`), auditar paradas (`TripAuditObserver`), guardar lo último conocido (`LiveTelemetryBoard`), servir HTTP (`MonitoringController`). |
+| **O** — Abierto/Cerrado | Un observador nuevo se agrega implementando `ITelemetryObserver` y registrándolo; el publicador, el simulador y los demás observadores no se modifican. Un tipo de evento nuevo es un `record` más. |
+| **L** — Sustitución de Liskov | Cualquier `ITelemetryObserver` puede sustituir a otro sin alterar al publicador: si falla, se aísla; si publica, se encola. Las pruebas usan observadores de prueba (que registran, lanzan excepciones o publican) en lugar de los reales. |
+| **I** — Segregación de interfaces | `ITelemetryObserver` tiene un método; el sujeto se divide en `ITelemetryPublisher` (publicar, lo que usa el simulador) y `ITelemetrySubject` (registrar y retirar); el tablero separa `ILiveTelemetryBoard` (consultar) del contrato de observador (alimentar). |
+| **D** — Inversión de dependencias | El simulador depende de `ITelemetryPublisher`; los observadores, de `IFleetAuditLogger`; el controlador, de `ILiveTelemetryBoard`. Nada concreto cruza esas fronteras y todo se compone en `Program.cs`. |
+
+#### 9. Pruebas de funcionamiento
+
+Carpeta `tests/FleetManagement.Application.Tests/Observer/` — **98 pruebas**, sin librerías de mocking (dobles escritos a mano en
+`ObserverTestDoubles.cs`):
+
+| Archivo | Pruebas | Qué demuestra |
+|---------|--------:|----------------|
+| `VehicleTelemetryPublisherTests.cs` | 27 | **Registro**, **retirada** (por método y con el `IDisposable`, también dos veces y tras volver a suscribirse), **sin duplicados**, **sin observadores** (publicar no hace nada), **notificación** a todos, en orden, **recepción** del mismo evento; aislamiento de fallos (el fallo queda en la auditoría con el nombre del observador, el del evento y la placa; y sigue aislándose sin auditor o si el auditor también falla); un evento publicado por un observador se encola y **no hay recursión**; el corte de ciclos y que después todo sigue normal; cambios de observadores durante la entrega; y con **muchos hilos** publicando y suscribiendo (cada evento llega una vez, de a uno, en el orden de cada productor). |
+| `TripAuditObserverTests.cs` | 11 | Una línea por parada con placa, parada y avance; el decimal siempre con punto (cualquiera sea la cultura del servidor); ni el movimiento ni la llegada se auditan; no se puede construir sin auditor y no conoce al publicador. |
+| `LiveTelemetryBoardTests.cs` | 16 | Tablero vacío; primer movimiento crea la entrada; redondeo igual al de la consulta de avance; una entrada por vehículo; la última parada se recuerda solo dentro del mismo viaje; la llegada marca `Arrived` y conserva los datos; un viaje nuevo limpia la marca; no inventa posiciones; orden por placa; instantánea que los eventos posteriores no cambian; y con muchos escritores y lectores nunca se ve un vehículo a medio actualizar. |
+| `TripTelemetryEventsTests.cs` | 18 | Los eventos de un paso (movimiento → paradas en orden de recorrido → llegada), una parada exactamente en el extremo del paso (se informa una vez), un paso grande que cruza varias, recorrer toda la ruta en pasos pequeños (cada parada una sola vez), origen y destino nunca son paradas, etiqueta de reemplazo, mismos datos → mismos eventos, y que calcular los eventos no cambia el viaje ni el vehículo. |
+| `SimulatorTelemetryIntegrationTests.cs` | 16 | **Integración con el monitoreo real**: el `VehicleMovementSimulator` real con `DeliveryRouteService`, Mediator y State reales y el reloj manual: un viaje completo publica `moved, moved, stop:Primera, moved, moved, stop:Segunda, moved, moved, moved, arrived`; se publica **después** de guardar el paso; la auditoría tiene una línea por parada y la llegada solo la audita el servicio de rutas; el tablero coincide con `TripProgressService` en cada paso; un vehículo que no está En ruta, o una ruta que no está activa, no publican nada; dos viajes a la vez; un observador que falla no detiene la simulación; sin publicador la simulación hace lo mismo que antes. |
+| `ObserverDesignTests.cs` | 10 | Pruebas de arquitectura (revisan las **firmas** de los tipos): `Monitoring` solo depende del puerto de auditoría y del DTO; solo la simulación conoce a `Monitoring`; el Mediator y el Bridge no conocen al Observer; ningún observador es participante del Mediator ni canal de notificación; el simulador conserva su constructor original y publica por el puerto estrecho; los eventos son inmutables; los observadores concretos son `sealed` y solo reciben abstracciones. |
+
+**Comandos exactos** (desde la raíz de la solución, `FleetManagementSystem/`):
+
+```bash
+dotnet test --filter "FullyQualifiedName~FleetManagement.Application.Tests.Observer"
+dotnet test                       # toda la suite: las anteriores y las nuevas
+```
+
+#### 10. Evidencias de ejecución
+
+*(Todo lo que sigue es salida real; el origen y la forma de reproducirlo están en la [sección 12](#12-pruebas-automatizadas-y-cómo-demostrar-el-factory-method).)*
+
+**a) Resultado de las pruebas** (ejecutor compatible con xUnit; ver las limitaciones en la [sección 11](#11-limitaciones-conocidas-del-prototipo)):
+
+```
+Carpeta/namespace             Total     OK  Fallos  Omitidas
+Bridge                           20     20       0         0     (sin modificar: los canales de notificación siguen igual)
+Mediator                        102    102       0         0     (sin modificar: la coordinación sigue igual)
+Simulation                       95     95       0         0     (sin modificar: la simulación sigue igual)
+Observer                         98     98       0         0
+```
+
+**b) Recorrido en vivo** (API en Development con la simulación acelerada ×5; el viaje de `VAN-002` tiene dos paradas). Lecturas
+reales de `GET /api/monitoring/telemetry` (se muestra la fila de `VAN-002`; en 51 s se tomaron 35 lecturas, del 2 % al 100 %). A los
+16.6 s de arrancar la API, el vehículo ya pasó por la primera parada y va hacia la segunda:
+
+```json
+{
+  "vehicleId": "17d3c6ec-4eb8-4d7c-84e1-11e9bcdf42f3",
+  "licensePlate": "VAN-002",
+  "routeId": "07537f98-adc9-4633-be46-89dd80296199",
+  "latitude": 7.095375,
+  "longitude": -73.15655,
+  "mileageKm": 18342.361,
+  "percent": 33.9,
+  "nextStopLabel": "Puente La Flora",
+  "lastStopReached": "Terminal de carga Girón",
+  "remainingKm": 4.594,
+  "etaMinutes": 0.6,
+  "arrived": false,
+  "updatedAt": "2026-11-15T12:20:44.9102912+00:00"
+}
+```
+
+Y a los 51.1 s, ya llegó (`arrived: true`) y el tablero conserva lo último que se publicó:
+
+```json
+{
+  "vehicleId": "17d3c6ec-4eb8-4d7c-84e1-11e9bcdf42f3",
+  "licensePlate": "VAN-002",
+  "routeId": "07537f98-adc9-4633-be46-89dd80296199",
+  "latitude": 7.1193,
+  "longitude": -73.1227,
+  "mileageKm": 18346.955,
+  "percent": 100,
+  "nextStopLabel": "Destino",
+  "lastStopReached": "Puente La Flora",
+  "remainingKm": 0,
+  "etaMinutes": 0,
+  "arrived": true,
+  "updatedAt": "2026-11-15T12:21:18.921138+00:00"
+}
+```
+
+Un vehículo que no ha estado en viaje (`MOT-004`) responde `404` con «No hay telemetría de ese vehículo: no ha estado en viaje desde que
+arrancó la aplicación.», y `GET /api/progress` (que no cambió) devuelve `[]` porque el viaje ya terminó; la telemetría, en cambio, sigue
+disponible. La auditoría (`GET /api/audit/logs`, filtrada por las categorías «Telemetría» y «Ruta») quedó así:
+
+```json
+[
+  { "category": "Telemetría", "message": "El vehículo VAN-002 alcanzó la parada 'Terminal de carga Girón' (8.2 % del recorrido)." },
+  { "category": "Telemetría", "message": "El vehículo VAN-002 alcanzó la parada 'Puente La Flora' (57.9 % del recorrido)." },
+  { "category": "Ruta",       "message": "Ruta 'Ruta Girón - Bucaramanga Centro' cambió su estado a Completed." }
+]
+```
+
+Dos paradas auditadas por el observador y **una sola** línea de llegada (la del servicio de rutas): la llegada no se audita dos veces.
+
+**c) Pruebas de mutación** (se rompieron a propósito 14 reglas del código del Observer, de a una, en una copia; ver el detalle y el
+resultado en la [sección 12](#12-pruebas-automatizadas-y-cómo-demostrar-el-factory-method)):
+
+| Id | Rotura deliberada (se aplicó de a una, en una copia) | Resultado | Una de las pruebas que la detecta |
+|----|------|------|------|
+| O1 | Se permiten suscripciones duplicadas | Detectada · 3 pruebas fallan | `VehicleTelemetryPublisherTests.TheSameObserver_SubscribedTwice_IsRegisteredOnce_AndReceivesEachEventOnce` |
+| O2 | El fallo de un observador se propaga | Detectada · 6 pruebas fallan | `SimulatorTelemetryIntegrationTests.AFailingObserver_DoesNotStopTheSimulation_NorTheOtherObservers` |
+| O3 | Un evento publicado por un observador se entrega recursivamente (sin cola) | Detectada · 2 pruebas fallan y la ejecución termina con `Stack overflow` | `VehicleTelemetryPublisherTests.AnEventPublishedByAnObserver_IsQueued_AndDeliveredAfterTheCurrentOneReachedEveryone` |
+| O4 | El tablero no reinicia la última parada al cambiar de viaje | Detectada · 1 prueba falla | `LiveTelemetryBoardTests.AReachedStop_IsRemembered_UntilTheTripChanges` |
+| O5 | Una parada en el punto de partida del paso se informa dos veces | Detectada · 1 prueba falla | `TripTelemetryEventsTests.AStepThatStartsExactlyOnAStop_DoesNotReportItAgain` |
+| O6 | El simulador publica ANTES de guardar el movimiento | Detectada · 3 pruebas fallan | `SimulatorTelemetryIntegrationTests.AFullTrip_PublishesEachMovement_EachStopOnce_AndOneArrival_InOrder` |
+| O7 | La categoría de auditoría de las paradas cambia | Detectada · 1 prueba falla | `TripAuditObserverTests.AReachedStop_LeavesOneAuditEntry_WithTheVehicleTheStopAndTheProgress` |
+| O8 | El límite de notificaciones en cadena deja de cortar (x1000) | Detectada · 2 pruebas fallan | `VehicleTelemetryPublisherTests.ACycleOfNotifications_IsCut_AfterTheLimit_AndAudited` |
+| O9 | La llegada se informa aunque el vehículo no haya llegado | Detectada · 1 prueba falla | `TripTelemetryEventsTests.BeforeTheDestination_ThereIsNoArrival` |
+| O10 | Un fallo al auditar el fallo de un observador se propaga | Detectada · 1 prueba falla | `VehicleTelemetryPublisherTests.IfTheAuditLoggerFailsToo_TheDeliveryStillGoesOn` |
+| O11 | Retirar a un observador no lo retira | Detectada · 5 pruebas fallan | `VehicleTelemetryPublisherTests.Unsubscribe_StopsTheDelivery_AndReportsWhetherItWasRegistered` |
+| O12 | La entrega deja de serializarse (cualquier hilo entrega, también dentro de un observador) | Detectada · 3 pruebas fallan | `VehicleTelemetryPublisherTests.AnEventPublishedByAnObserver_IsQueued_AndDeliveredAfterTheCurrentOneReachedEveryone` |
+| O13 | El tablero no marca la llegada | Detectada · 3 pruebas fallan | `LiveTelemetryBoardTests.Arrival_MarksTheVehicleAsArrived_AndKeepsItsLastKnownData` |
+| O14 | El tablero entrega los vehículos sin ordenar por placa | Detectada · 1 prueba falla | `SimulatorTelemetryIntegrationTests.TwoTripsAtOnce_ProduceTheirOwnEvents_AndTheBoardListsBothByPlate` |
+
+**Conclusión: 14 de 14 roturas detectadas; ninguna sobrevivió.** Cada rotura se comparó contra la suite completa (1438 pruebas); «detectada» significa que la compilación falló, que al menos una prueba falló o que la ejecución se interrumpió.
+
+En la rotura O3 (entrega recursiva, sin cola) dos pruebas fallan: en una el orden de entrega deja de ser el esperado (`AnEventPublishedByAnObserver_IsQueued_…`) y en la otra las notificaciones llegan a anidarse 50 veces en lugar de 1 (`NotificationsNeverNest_EvenWhenObserversKeepPublishing`); la prueba siguiente, con un observador que sigue publicando sin fin (`ACycleOfNotifications_IsCut_AfterTheLimit_AndAudited`), termina el proceso de pruebas con `Stack overflow`. En la corrida completa de las 36 roturas el arnés la registró como «la ejecución se interrumpió»; volví a ejecutar solo esta rotura, sobre el código final, para leer cómo terminaba.
+
+### 8.19 State — qué puede hacer un vehículo según su estado
+
+El estado operativo de un vehículo (`VehicleStatus`: Disponible, En ruta, Mantenimiento y Fuera de servicio) decidía comportamiento
+comparando el enumerado en **cuatro sitios distintos**: el participante de vehículos del Mediator (`ReleasedStatus`), las reglas de
+asignación (un `switch` en `OperabilityViolation`), el seguimiento de viajes (`ActiveTrips.IsEnRoute`) y el registro de mantenimientos
+(`if (vehicle.Status == Maintenance) …` en `MaintenanceService`). Y había un quinto sitio donde la falta de una regla era el problema:
+el cambio manual por la API (`UpdateVehicleStatusAsync`), que asignaba **cualquier** estado a **cualquier** estado, incluso un número
+que no es un estado. El **State** pone cada regla en el estado al que pertenece: el vehículo se comporta según el objeto de estado que
+le corresponde y nadie más tiene que comparar el enumerado.
+
+#### 1. Descripción del patrón
+
+State permite que un objeto (el **contexto**) cambie su comportamiento cuando cambia su estado interno: en lugar de condicionales
+sobre el estado repartidos por el código, hay una clase por estado y el contexto delega en la que está vigente. Cada estado concreto
+sabe qué permite, cómo reacciona a los eventos y a qué estados se puede pasar. Aquí el contexto es `VehicleStateContext` (envuelve a
+un `Vehicle`), los estados son `AvailableState`, `EnRouteState`, `MaintenanceState` y `OutOfServiceState`, y los eventos son los tres
+que ya existían en el sistema: el ciclo de vida de una ruta, el cambio manual de estado y el registro de un mantenimiento.
+
+#### 2. Justificación de su utilización
+
+| Problema real del proyecto | Cómo lo resuelve el State |
+|----------------------------|---------------------------|
+| La misma pregunta —«¿este vehículo puede operar?»— se respondía con comparaciones distintas en las reglas de asignación y en el seguimiento de viajes, y se habría repetido en los análisis nuevos. | La responde **el estado** (`CanOperate`, `CanTrackTrip`, `OperationBlockReason`). Los demás preguntan; ya no comparan. |
+| El cambio manual de estado aceptaba cualquier valor: un vehículo en el taller podía pasar a «En ruta» con un solo `PATCH`, y también un número que no es un estado (`"99"`). | Cada estado declara a cuáles se puede pasar; el resto se rechaza con `InvalidVehicleTransitionException` (400 con el motivo) **antes** de guardar, auditar o notificar. |
+| Agregar un estado (por ejemplo, «Reservado») obligaba a buscar y modificar los condicionales de cuatro clases. | Se agrega **una clase** (y su fila en el resolutor); las clases que consultan al estado no se tocan (Open/Closed). |
+| Las reglas de ciclo de vida de las rutas (Mediator) estaban mezcladas con la decisión de qué estado le toca al vehículo. | El Mediator sigue coordinando **quién** avisa a quién; la decisión «qué le pasa a este vehículo» la toma su estado. |
+
+**Qué le toca a cada patrón (no se duplican responsabilidades):**
+
+| Patrón | Responsabilidad que **conserva** | Qué hace el State en esa frontera |
+|--------|----------------------------------|-----------------------------------|
+| **Mediator** ([8.16](#816-mediator--coordinar-el-estado-de-la-ruta-con-el-del-vehículo)) | Coordinar el estado de la ruta con el del vehículo: cuándo y a quién se avisa. Sus reglas no cambian. | Es quien decide **qué le pasa al vehículo** cuando el Mediator le avisa: `VehicleColleague` ya no tiene un `if`, le pasa el evento al estado. |
+| **Observer** ([8.18](#818-observer--publicar-la-telemetría-del-recorrido-sin-que-el-simulador-sepa-quién-escucha)) | Distribuir la telemetría. | Nada: el simulador solo mueve a los vehículos que su estado deja seguir un viaje. |
+| **Visitor** ([8.20](#820-visitor--analizar-la-flota-sin-cargar-las-entidades-con-análisis)) | Recorrer vehículos, rutas y mantenimientos para analizarlos. | Los visitantes le **preguntan** al estado si el vehículo puede operar y por qué no; no repiten esas reglas. |
+| **Bridge y Decorators de notificación** | Enviar el aviso por un canal y decidir su prioridad. | Nada: `VehicleService` sigue notificando cada cambio **aceptado** con el mismo puente y los mismos decoradores. |
+
+#### 3. Ubicación de la implementación
+
+El estado y sus reglas son conocimiento del **dominio** (`Vehicle.Status` y `VehicleStatus` ya viven allí), así que el patrón está en la
+capa Domain y no depende de nada más (una prueba lo vigila).
+
+| Archivo (`src/FleetManagement.Domain/States/`) | Qué contiene |
+|-----------------------------------------------|--------------|
+| `IVehicleStateRules.cs` | Lado de **consulta**: `Status`, `CanOperate`, `CanTrackTrip`, `OperationBlockReason(placa)`. |
+| `IVehicleStateBehavior.cs` | Lado de **comportamiento**: `StartTrip`, `FinishTrip`, `ChangeTo`, `CompleteMaintenance`. |
+| `IVehicleState.cs` | Une las dos mitades; no agrega miembros. |
+| `VehicleState.cs` | Estado abstracto: lo común (regla de transición manual, comportamientos por defecto). |
+| `AvailableState.cs`, `EnRouteState.cs`, `MaintenanceState.cs`, `OutOfServiceState.cs` | Los cuatro estados concretos. |
+| `VehicleStateContext.cs` | El contexto: envuelve a un `Vehicle` y delega en su estado vigente. |
+| `IVehicleStateResolver.cs`, `VehicleStateResolver.cs` | Entrega el objeto de estado de cada `VehicleStatus` (una instancia compartida por estado). |
+| `InvalidVehicleTransitionException.cs` | La transición manual no permitida. |
+
+**Archivos existentes que usan los estados** (los cambios, mínimos y compatibles, están en la sección 7 de este apartado):
+`Application/Mediators/VehicleColleague.cs`, `Application/Services/VehicleService.cs`, `Application/Services/MaintenanceService.cs`,
+`Application/Assignment/RouteAssignmentValidator.cs`, `Application/Simulation/ActiveTrips.cs`, `Api/Controllers/FleetController.cs` y
+`Api/Program.cs`. La entidad `Vehicle` **no se modificó**.
+
+Pruebas: `tests/FleetManagement.Application.Tests/State/` (8 archivos) y los apoyos `Support/ConfigurableStates.cs` y
+`Support/SignatureDependencies.cs`.
+
+#### 4. Diagrama UML
+
+```mermaid
+classDiagram
+    direction TB
+    class VehicleStateContext {
+        <<sealed>>
+        +Vehicle Vehicle
+        +State IVehicleState
+        +CanOperate bool
+        +CanTrackTrip bool
+        +OperationBlockReason() string
+        +StartTrip()
+        +FinishTrip(hasOtherActiveTrip)
+        +ChangeTo(target)
+        +CompleteMaintenance()
+        ~TransitionTo(target)
+    }
+    class IVehicleStateRules {
+        <<interface>>
+        +Status VehicleStatus
+        +CanOperate bool
+        +CanTrackTrip bool
+        +OperationBlockReason(licensePlate) string
+    }
+    class IVehicleStateBehavior {
+        <<interface>>
+        +StartTrip(context)
+        +FinishTrip(context, hasOtherActiveTrip)
+        +ChangeTo(context, target)
+        +CompleteMaintenance(context)
+    }
+    class IVehicleState {
+        <<interface>>
+    }
+    class VehicleState {
+        <<abstract>>
+        #ManualTargets
+    }
+    class AvailableState
+    class EnRouteState
+    class MaintenanceState
+    class OutOfServiceState
+    class IVehicleStateResolver {
+        <<interface>>
+        +For(status) IVehicleState
+    }
+    class VehicleStateResolver {
+        <<sealed>>
+        +Default
+    }
+    class Vehicle {
+        +Status VehicleStatus
+    }
+    class InvalidVehicleTransitionException
+    IVehicleStateRules <|-- IVehicleState
+    IVehicleStateBehavior <|-- IVehicleState
+    IVehicleState <|.. VehicleState
+    VehicleState <|-- AvailableState
+    VehicleState <|-- EnRouteState
+    VehicleState <|-- MaintenanceState
+    VehicleState <|-- OutOfServiceState
+    IVehicleStateResolver <|.. VehicleStateResolver
+    VehicleStateResolver o-- IVehicleState : una instancia por estado
+    VehicleStateContext --> Vehicle : lee y escribe Status
+    VehicleStateContext --> IVehicleStateResolver : obtiene el estado vigente
+    VehicleStateContext ..> IVehicleState : delega
+    VehicleState ..> InvalidVehicleTransitionException : lanza
+    class VehicleColleague
+    class VehicleService
+    class MaintenanceService
+    class RouteAssignmentValidator
+    class ActiveTrips
+    VehicleColleague --> VehicleStateContext : StartTrip y FinishTrip
+    VehicleService --> VehicleStateContext : ChangeTo
+    MaintenanceService --> VehicleStateContext : CompleteMaintenance
+    RouteAssignmentValidator --> VehicleStateContext : OperationBlockReason
+    ActiveTrips --> VehicleStateContext : CanTrackTrip
+```
+
+```mermaid
+stateDiagram-v2
+    direction LR
+    [*] --> Available : alta del vehículo
+    Available --> EnRoute : salir a una ruta o a mano
+    EnRoute --> Available : termina el viaje o se libera a mano
+    Available --> Maintenance : a mano
+    EnRoute --> Maintenance : a mano
+    Maintenance --> Available : registrar mantenimiento o a mano
+    Available --> OutOfService : a mano
+    EnRoute --> OutOfService : a mano
+    Maintenance --> OutOfService : a mano
+    OutOfService --> Available : a mano
+    OutOfService --> Maintenance : a mano
+```
+
+```mermaid
+sequenceDiagram
+    participant API as PATCH /api/fleet/vehicles/{id}/status
+    participant C as FleetController
+    participant S as VehicleService
+    participant X as VehicleStateContext
+    participant E as Estado vigente
+    participant R as IVehicleRepository
+    API->>C: {"status": "EnRoute"}
+    C->>S: UpdateVehicleStatusAsync(id, request)
+    S->>R: GetByIdAsync(id)
+    S->>X: new VehicleStateContext(vehicle).ChangeTo(EnRoute)
+    X->>E: State.ChangeTo(context, EnRoute)
+    Note over X,E: el estado vigente se obtiene de Vehicle.Status
+    alt el estado permite pasar a EnRoute
+        E->>X: TransitionTo(EnRoute)
+        S->>R: UpdateAsync(vehicle)
+        S->>S: audita el cambio y lo notifica (Bridge y Decorators)
+        C-->>API: 204
+    else no lo permite (por ejemplo, Maintenance)
+        E-->>S: InvalidVehicleTransitionException
+        Note over S,R: no se guarda, no se audita y no se notifica
+        C-->>API: 400 con el motivo
+    end
+```
+
+#### 5. Interfaces y clases participantes
+
+| Rol del patrón | Clase o interfaz | Responsabilidad |
+|----------------|------------------|-----------------|
+| **Context** | `VehicleStateContext` | Envuelve a un `Vehicle` y ofrece sus operaciones (`StartTrip`, `FinishTrip`, `ChangeTo`, `CompleteMaintenance`) y sus consultas; cada una se delega en el estado vigente. **No tiene ningún `if` ni `switch` sobre el estado.** Es un objeto liviano de un solo uso. Solo los estados pueden mover al vehículo (`TransitionTo` es `internal`). |
+| **State** (consulta) | `IVehicleStateRules` | Lo que el estado **permite**: `CanOperate`, `CanTrackTrip`, `OperationBlockReason`. Es lo único que necesitan quienes solo preguntan. |
+| **State** (comportamiento) | `IVehicleStateBehavior` | Lo que el estado **hace** ante cada evento. Cada operación recibe el contexto; es el estado quien decide si el vehículo cambia, se rechaza o se ignora. |
+| **State** | `IVehicleState` | Une las dos interfaces anteriores. Segregación (ISP): un cliente que solo consulta no depende de las operaciones que cambian el estado. |
+| **Abstract State** | `VehicleState` | Lo común: la regla de transición manual (`ChangeTo`: pedir el mismo estado no hace nada; un destino que el estado no permite lanza la excepción), `StartTrip` y los comportamientos por defecto. Cada estado concreto declara solo lo suyo. |
+| **Concrete State** | `AvailableState` | Libre: puede operar, aún no sigue un viaje; puede ir a En ruta, Mantenimiento o Fuera de servicio. |
+| **Concrete State** | `EnRouteState` | En recorrido: opera y **es el único que sigue un viaje**; al terminar uno queda Disponible salvo que siga en otro viaje activo; puede ir a Disponible, Mantenimiento o Fuera de servicio. |
+| **Concrete State** | `MaintenanceState` | En el taller: no opera (con su motivo); conserva el estado al terminar un viaje; **al registrarse un mantenimiento queda Disponible**; solo puede pasar a mano a Disponible o Fuera de servicio. |
+| **Concrete State** | `OutOfServiceState` | Fuera de servicio: no opera (con su motivo); conserva el estado al terminar un viaje; solo puede pasar a mano a Disponible o Mantenimiento. |
+| **Resolutor** | `IVehicleStateResolver` / `VehicleStateResolver` | Entrega el estado de cada valor de `VehicleStatus` (una instancia por estado, compartida). Los servicios dependen de la interfaz (DIP) y no construyen estados. Rechaza un valor que no es un estado. |
+| **Almacén del estado** | `Vehicle.Status` | La **única** copia del estado (lo que ya persisten los repositorios, los DTO y la API). El contexto deriva el estado vigente de ahí en cada consulta, así que no hay una segunda copia que pueda desincronizarse. |
+| **Error de dominio** | `InvalidVehicleTransitionException` | Hereda de `InvalidOperationException`, como `AssignmentRuleException`: una regla de negocio incumplida. Dice de qué estado a cuál y a cuáles sí se puede pasar. |
+| **Clientes** | `VehicleColleague`, `VehicleService`, `MaintenanceService`, `RouteAssignmentValidator`, `ActiveTrips`, y los visitantes de 8.20 | Consultan o accionan el estado; ninguno compara `VehicleStatus` para decidir su comportamiento. |
+
+#### 6. Funcionamiento dentro del sistema
+
+**Qué hace cada estado.**
+
+| Estado | ¿Opera? | ¿Sigue un viaje? | Si no opera, motivo | Una ruta se pone en marcha | Termina o se cancela un viaje | Se registra un mantenimiento | Cambio manual permitido a |
+|--------|:------:|:----------------:|---------------------|----------------------------|------------------------------|-----------------------------|---------------------------|
+| **Available** | sí | no | — | queda En ruta | no cambia | no cambia | EnRoute, Maintenance, OutOfService |
+| **EnRoute** | sí | **sí** | — | sigue En ruta | queda Available **si no sigue en otro viaje activo** | no cambia | Available, Maintenance, OutOfService |
+| **Maintenance** | no | no | «El vehículo {placa} está en mantenimiento; no se puede usar en una ruta.» | queda En ruta (regla conservada del Mediator) | no cambia | **queda Available** | Available, OutOfService |
+| **OutOfService** | no | no | «El vehículo {placa} está fuera de servicio; no se puede usar en una ruta.» | queda En ruta (regla conservada del Mediator) | no cambia | no cambia | Available, Maintenance |
+
+Pedir a mano el estado en el que ya está no cambia nada (es inofensivo, como siempre) y sigue guardándose, auditándose y notificándose
+igual que antes.
+
+**Transiciones no permitidas.** Solo el cambio **manual** valida transiciones; las del ciclo de vida de las rutas y la del
+mantenimiento siguen las reglas que ya tenían:
+
+| Desde \ Hacia | Available | EnRoute | Maintenance | OutOfService |
+|---------------|:---------:|:-------:|:-----------:|:------------:|
+| **Available** | = | ✔ | ✔ | ✔ |
+| **EnRoute** | ✔ | = | ✔ | ✔ |
+| **Maintenance** | ✔ | **✘** | = | ✔ |
+| **OutOfService** | ✔ | **✘** | ✔ | = |
+
+(= : se pide el mismo estado, no pasa nada). Lo que se rechaza es sacar de golpe a la carretera a un vehículo que está en el taller
+o fuera de servicio: antes debe quedar **Disponible**, un paso consciente. Es coherente con las reglas de asignación, que ya impedían
+usar ese vehículo en una ruta. Además se rechaza un valor que no corresponde a ninguno de los cuatro estados (por ejemplo, `"99"`).
+
+**Tres orígenes de eventos, a propósito separados** (así ya funcionaba el sistema, y por eso no se unificaron):
+
+1. **Ciclo de vida de las rutas** (`StartTrip`, `FinishTrip`), que llega por el Mediator. Son las reglas de coordinación de siempre;
+   **no se endurecieron**: iniciar un viaje deja al vehículo En ruta desde cualquier estado, y quien impide que un vehículo en el taller
+   salga a una ruta son las reglas de asignación, que se ejecutan antes de llegar al Mediator.
+2. **Cambio manual** (`ChangeTo`), que pide un administrador por la API. Es el único que valida transiciones.
+3. **Registro de un mantenimiento** (`CompleteMaintenance`), que llega desde `MaintenanceService.CreateAsync`: un vehículo que
+   estaba en el taller sale de él y los demás **no cambian**. Era un `if` sobre el estado dentro del servicio; ahora es
+   comportamiento del estado, con el mismo resultado.
+
+**Código esencial** (extractos literales de `Domain/States/`):
+
+```csharp
+// VehicleState.cs — la regla de la transición manual, común a los cuatro estados
+public void ChangeTo(VehicleStateContext context, VehicleStatus target)
+{
+    ArgumentNullException.ThrowIfNull(context);
+
+    if (target == Status)
+        return;
+
+    if (!ManualTargets.Contains(target))
+        throw new InvalidVehicleTransitionException(context.Vehicle.LicensePlate, Status, target, ManualTargets);
+
+    context.TransitionTo(target);
+}
+```
+
+```csharp
+// EnRouteState.cs — solo En ruta libera al vehículo, y solo si no sigue en otro viaje activo
+public override void FinishTrip(VehicleStateContext context, bool hasOtherActiveTrip)
+{
+    ArgumentNullException.ThrowIfNull(context);
+
+    if (!hasOtherActiveTrip)
+        context.TransitionTo(VehicleStatus.Available);
+}
+```
+
+```csharp
+// MaintenanceState.cs — qué responde cuando alguien pregunta si puede operar, y qué hace al registrarse un mantenimiento
+public override bool CanOperate => false;
+
+public override string? OperationBlockReason(string licensePlate)
+    => $"El vehículo {licensePlate} está en mantenimiento; no se puede usar en una ruta.";
+
+public override void CompleteMaintenance(VehicleStateContext context)
+{
+    ArgumentNullException.ThrowIfNull(context);
+    context.TransitionTo(VehicleStatus.Available);
+}
+```
+
+```csharp
+// VehicleStateContext.cs — el contexto no tiene ningún if/switch sobre el estado: delega
+public IVehicleState State => _states.For(Vehicle.Status);
+
+public void StartTrip() => State.StartTrip(this);
+public void FinishTrip(bool hasOtherActiveTrip) => State.FinishTrip(this, hasOtherActiveTrip);
+public void ChangeTo(VehicleStatus target) => State.ChangeTo(this, target);
+public void CompleteMaintenance() => State.CompleteMaintenance(this);
+
+internal void TransitionTo(VehicleStatus target)
+{
+    _states.For(target); // rechaza un valor que no sea un estado conocido antes de tocar al vehículo
+    Vehicle.Status = target;
+}
+```
+
+**Decisiones de diseño.**
+
+- **El estado se deriva de `Vehicle.Status`, no se guarda aparte.** Los repositorios, los DTO, la API y los datos de demostración siguen
+  usando el enumerado; el contexto resuelve el objeto de estado en cada consulta. No hay dos copias que puedan quedar desincronizadas
+  ni cambios en el contrato de la entidad.
+- **Los estados no tienen datos: son inmutables y se comparten** (una instancia por estado, para todos los vehículos y todos los
+  hilos). Sus constructores son `internal` y se obtienen por el resolutor; una prueba vigila que no tengan campos modificables.
+- **`TransitionTo` es `internal`:** solo los estados (en este ensamblado) pueden decidir una transición. Nadie de afuera puede
+  saltarse las reglas con un `context.TransitionTo(...)`.
+
+#### 7. Integración con los demás componentes
+
+**Cambios en archivos existentes** (los únicos; cada uno reemplaza una comparación del enumerado por una pregunta o una orden al estado):
+
+| Archivo | Cambio | Por qué era necesario |
+|---------|--------|-----------------------|
+| `Application/Mediators/VehicleColleague.cs` | `vehicle.Status = VehicleStatus.EnRoute` → `new VehicleStateContext(vehicle, _states).StartTrip()`; y `ReleasedStatus(...)` → `.FinishTrip(hasOtherActiveTrip)`. Parámetro **opcional** al final del constructor (`IVehicleStateResolver? states = null`). | Es donde estaban las reglas 1, 2 y 3 del Mediator. El Mediator y los participantes de rutas **no cambiaron**. |
+| `Application/Services/VehicleService.cs` | `vehicle.Status = newStatus` → `…ChangeTo(newStatus)`, **antes** de guardar, auditar o notificar. Séptimo parámetro opcional del constructor. | Es el único cambio manual de estado; sin esto no habría validación de transiciones. |
+| `Application/Services/MaintenanceService.cs` | `if (vehicle.Status == Maintenance) vehicle.Status = Available` → `…CompleteMaintenance()`. Parámetro opcional al final. | Era otra comparación del enumerado con una regla propia; mismo resultado, ahora por el estado. |
+| `Application/Assignment/RouteAssignmentValidator.cs` | El `switch` de `OperabilityViolation` → `…OperationBlockReason()`. Quinto parámetro opcional. | Los mensajes de rechazo son **los mismos** (ahora los dan los estados). |
+| `Application/Simulation/ActiveTrips.cs` | `vehicle.Status == EnRoute` → `…CanTrackTrip`. | Define qué vehículos sigue la simulación: sigue siendo solo «En ruta». |
+| `Api/Controllers/FleetController.cs` | Un `catch (InvalidVehicleTransitionException)` que responde 400 con el motivo, igual que los demás errores de regla. | Sin él, una transición rechazada sería un 500. |
+| `Api/Program.cs` | Un registro: `AddSingleton<IVehicleStateResolver>(VehicleStateResolver.Default)`. | Raíz de composición. |
+
+Las **pruebas existentes no se modificaron**: los constructores de `VehicleColleague`, `VehicleService`, `MaintenanceService` y
+`RouteAssignmentValidator` solo ganaron un parámetro opcional al final, así que las pruebas que los construyen siguen compilando
+(una prueba de diseño lo fija).
+
+**Registro en `Program.cs`:**
+
+```csharp
+builder.Services.AddSingleton<IVehicleStateResolver>(VehicleStateResolver.Default);
+```
+
+| Pieza | Ciclo de vida | Por qué |
+|-------|---------------|---------|
+| `IVehicleStateResolver` (`VehicleStateResolver.Default`) | **Singleton** | Los estados no guardan datos (son inmutables): una sola tabla compartida por toda la aplicación. Es **la misma instancia** (`Default`) que usa quien construye un servicio sin inyectarla (por ejemplo `ActiveTrips`, que es una clase estática, y las pruebas). Lo consumen servicios **Scoped**, y un Singleton dentro de un Scoped es la dirección segura (no hay dependencia capturada). |
+| `VehicleStateContext` | **No se registra** | Es un objeto de un solo uso que envuelve a un vehículo concreto (un dato de tiempo de ejecución) y vive lo que dura la operación: se crea con `new` alrededor del vehículo que se acaba de leer. Registrarlo como Singleton compartiría un vehículo entre peticiones, y como Scoped o Transient no tendría de dónde sacar el vehículo. |
+| Los cuatro estados concretos | **No se registran** | Nadie los pide directamente; se obtienen por el resolutor. |
+
+**Endpoints.** `PATCH /api/fleet/vehicles/{id}/status` responde **204** como siempre cuando el cambio se acepta; **404** si el
+vehículo no existe y **400** si el texto no es un estado («Estado de vehículo inválido: 'Volando'.»), igual que antes; y ahora
+**400** con el motivo cuando el estado actual no permite pasar al pedido. No se agregó ningún endpoint. El dashboard no se modificó: su
+selector de estado (`frontend/js/dashboard.js`) ya mostraba el `message` de cualquier error de ese `PATCH` en un aviso y volvía a leer el
+estado real del vehículo, de modo que un 400 por transición no permitida se ve igual que cualquier otro rechazo (esto se verificó leyendo el
+código del frontend; no se probó en un navegador en esta entrega).
+
+**Qué no cambió.**
+
+- **Mediator:** la coordinación, sus cuatro reglas y su auditoría («Ruta … cambió su estado a …») son las mismas; lo comprueban las
+  102 pruebas de `Mediator/` (sin modificar) y 30 pruebas nuevas de compatibilidad.
+- **Bridge y Decorators de notificación:** `VehicleService` notifica cada cambio aceptado con el mismo puente y la misma prioridad
+  (derivada del nuevo estado: Fuera de servicio = alta, Mantenimiento = normal, resto = baja). Un cambio rechazado no notifica.
+- **Entidad `Vehicle`, DTO y repositorios:** sin cambios; el estado sigue siendo `Vehicle.Status`.
+- **Comparaciones del enumerado que se dejaron a propósito**, porque no deciden comportamiento por estado: el estado inicial
+  `Available` de las fábricas y del dominio, los datos de demostración, el conteo de vehículos por estado en `FleetMetrics`, el mensaje
+  «figura como en ruta» de `DispatchPlanningService` y la prioridad de la notificación en `VehicleService`. Cambiarlos habría ampliado
+  el alcance sin un beneficio en el comportamiento.
+
+**Cambios de comportamiento (se informan, no se ocultan).** Solo hay dos, ambos en el cambio **manual** de estado por la API:
+
+1. Pasar de **Mantenimiento** o **Fuera de servicio** directamente a **En ruta** ahora responde **400** (antes se aceptaba). Es la
+   regla nueva que el State hace explícita.
+2. Un número que no corresponde a ninguno de los cuatro estados (por ejemplo `"99"`) ahora responde **400**. La API original lo
+   aceptaba y **guardaba un estado que no existe**; en la sección de evidencias se ve el contraste real.
+
+#### 8. Principios SOLID aplicados
+
+| Principio | Cómo se cumple |
+|-----------|----------------|
+| **S** — Responsabilidad única | Cada estado concreto solo sabe lo que ese estado permite y hace; el contexto solo delega; el resolutor solo entrega estados; los servicios solo coordinan su caso de uso. Las reglas del estado ya no están repartidas en varias clases. |
+| **O** — Abierto/Cerrado | Un estado nuevo es una clase más (y una fila en el resolutor); los clientes que consultan al estado no se modifican. Una prueba lo demuestra con un estado alternativo que cambia el resultado sin tocar al Mediator. |
+| **L** — Sustitución de Liskov | Los cuatro estados sustituyen a `VehicleState` sin que el contexto lo note; las pruebas usan un estado de prueba (`ConfigurableState`) en lugar de los reales y los componentes se comportan según lo que ese estado responde. |
+| **I** — Segregación de interfaces | `IVehicleState` se divide en `IVehicleStateRules` (consultar) y `IVehicleStateBehavior` (cambiar). Una prueba comprueba que quien consulta no arrastra el comportamiento. |
+| **D** — Inversión de dependencias | Los servicios dependen de `IVehicleStateResolver` y no de estados concretos (una prueba revisa las firmas y que el ensamblado de Application no contenga ningún estado concreto). |
+
+#### 9. Pruebas de funcionamiento
+
+Carpeta `tests/FleetManagement.Application.Tests/State/` — **192 pruebas**, sin librerías de mocking:
+
+| Archivo | Pruebas | Qué demuestra |
+|---------|--------:|----------------|
+| `VehicleStateBehaviorTests.cs` | 58 | Cada estado concreto: qué permite (`CanOperate`, `CanTrackTrip`), su motivo de bloqueo con los mensajes originales, cómo reacciona a iniciar y terminar un viaje, **la matriz completa de transiciones manuales (16 casos, incluidas las no permitidas)**, que el rechazo explica el motivo y a dónde sí se puede ir, que un valor indefinido se rechaza, que los estados son inmutables y compartidos, y que el contexto no guarda una segunda copia del estado. |
+| `VehicleServiceStateTransitionTests.cs` | 32 | **Transiciones no permitidas a través del servicio real**: un cambio permitido se guarda, se audita y se notifica; uno rechazado **no se guarda, no se audita y no se notifica**; el texto del estado sigue sin distinguir mayúsculas; vehículo inexistente y texto inválido responden como antes; la prioridad de la notificación sigue saliendo del nuevo estado. |
+| `VehicleStateMediatorCompatibilityTests.cs` | 30 | **Compatibilidad con el Mediator**: el estado guardado del vehículo sigue las reglas de siempre desde cada estado inicial; un vehículo que sigue en otro viaje activo no se libera; una ruta sin vehículo o con vehículo inexistente no coordina nada; un retraso por alerta no toca al vehículo; el participante de vehículos le pregunta al estado y un estado alternativo cambia el resultado sin tocar al Mediator. |
+| `VehicleStateMaintenanceRegistrationTests.cs` | 26 | Qué le hace a cada estado el registro de un mantenimiento (solo el taller sale de él; En ruta y Fuera de servicio no cambian); que el servicio sigue guardando el registro, la fecha, la auditoría y el aviso; que quien decide es el estado (con un estado alternativo). |
+| `VehicleStateTripTrackingTests.cs` | 16 | Un viaje solo lo sigue la simulación mientras la ruta está activa **y** el vehículo está En ruta; mandar el vehículo al taller detiene su viaje y devolverlo a En ruta lo vuelve a mover; la simulación y la consulta de avance coinciden en qué viajes existen. |
+| `VehicleStateAssignmentTests.cs` | 15 | Las reglas de asignación aceptan o rechazan según lo que el estado permite, con los mismos mensajes; el motivo del estado sale junto con las demás infracciones; un estado alternativo cambia el resultado sin tocar al validador. |
+| `VehicleStateDesignTests.cs` | 11 | Pruebas de arquitectura: exactamente cuatro estados; el espacio `States` solo conoce el dominio; los componentes consultan al resolutor y nunca a un estado concreto; los constructores existentes se conservan con el parámetro nuevo opcional; la entidad `Vehicle` sigue con su enumerado y no conoce los estados. |
+| `VehicleStateLifecycleScenarioTests.cs` | 4 | Escenarios completos: un vehículo que va al taller a mitad de un viaje se queda allí cuando el viaje termina y vuelve por Disponible; un viaje normal libera al vehículo por el estado; una ruta planificada no toca al vehículo; solo un cambio aceptado envía aviso. |
+
+**Comandos exactos** (desde la raíz de la solución, `FleetManagementSystem/`):
+
+```bash
+dotnet test --filter "FullyQualifiedName~FleetManagement.Application.Tests.State"
+dotnet test                       # toda la suite: las anteriores y las nuevas
+```
+
+#### 10. Evidencias de ejecución
+
+*(Todo lo que sigue es salida real; el origen y la forma de reproducirlo están en la [sección 12](#12-pruebas-automatizadas-y-cómo-demostrar-el-factory-method).)*
+
+**a) Resultado de las pruebas** (ejecutor compatible con xUnit; ver las limitaciones en la [sección 11](#11-limitaciones-conocidas-del-prototipo)):
+
+```
+Carpeta/namespace             Total     OK  Fallos  Omitidas
+Mediator                       102    102       0         0     (sin modificar: la coordinación sigue igual)
+State                          192    192       0         0
+```
+
+**b) Transiciones no permitidas, con la API en marcha** (Development; `$TOKEN` es la sesión de `admin`). `CAR-003` está en
+Mantenimiento y `VAN-005` Fuera de servicio:
+
+```text
+$ curl -s -X PATCH http://localhost:5080/api/fleet/vehicles/{id de CAR-003}/status -H "Authorization: Bearer $TOKEN" \
+       -H 'Content-Type: application/json' -d '{"status": "EnRoute"}'
+HTTP 400
+{ "message": "Transición de estado no permitida: el vehículo CAR-003 está en Maintenance y no puede pasar a EnRoute. Desde Maintenance solo puede pasar a: Available, OutOfService." }
+
+Auditoría de categoría «Vehículo» antes: 0 · después: 0  → el cambio rechazado no dejó rastro
+Estado de CAR-003 después del rechazo: Maintenance
+
+$ curl -s -X PATCH .../vehicles/{id de VAN-005}/status ... -d '{"status": "EnRoute"}'
+HTTP 400
+{ "message": "Transición de estado no permitida: el vehículo VAN-005 está en OutOfService y no puede pasar a EnRoute. Desde OutOfService solo puede pasar a: Available, Maintenance." }
+```
+
+El camino permitido (Mantenimiento → Disponible → En ruta) responde `204` las dos veces, y la auditoría de la categoría «Vehículo» deja
+**solo** los dos cambios aceptados:
+
+```json
+[
+  { "category": "Vehículo", "message": "Vehículo CAR-003 cambió de estado: Maintenance -> Available." },
+  { "category": "Vehículo", "message": "Vehículo CAR-003 cambió de estado: Available -> EnRoute." }
+]
+```
+
+**c) Lo de siempre se conserva y el único cambio de comportamiento, frente a la API original** (mismo `PATCH` a `MOT-004`):
+
+```text
+{"status": "Volando"}  → HTTP 400  { "message": "Estado de vehículo inválido: 'Volando'." }          (igual que antes)
+
+{"status": "99"}       → API nueva     (5080): HTTP 400  { "message": "Transición de estado no permitida: el vehículo MOT-004 está en Available y no puede pasar a 99. Desde Available solo puede pasar a: EnRoute, Maintenance, OutOfService." }
+                       → API original  (5081): HTTP 204  y el estado guardado para MOT-004 quedó «99»
+```
+
+**d) El estado actúa dentro del flujo real** (mismo recorrido en vivo):
+
+```text
+Se manda MOT-004 al taller (PATCH Maintenance → 204)
+POST /api/maintenance (mantenimiento de MOT-004) → 200      Estado de MOT-004 después: Available      (CompleteMaintenance: el taller se libera)
+POST /api/maintenance (mantenimiento de VAN-005) → 200      Estado de VAN-005 después: OutOfService   (los demás estados no cambian)
+
+POST /api/routes (ruta para TRK-001, Disponible) → 201      Estado de TRK-001 con la ruta planificada: Available  (una ruta planificada no toca al vehículo)
+PATCH /api/routes/{id}/status {"status": "InProgress"} → 204   Estado de TRK-001: EnRoute          (el Mediator avisa y el estado lo deja En ruta)
+```
+
+**e) Pruebas de mutación** (se rompieron a propósito 13 reglas del código de State, de a una, en una copia; ver el detalle y el
+resultado en la [sección 12](#12-pruebas-automatizadas-y-cómo-demostrar-el-factory-method)):
+
+| Id | Rotura deliberada (se aplicó de a una, en una copia) | Resultado | Una de las pruebas que la detecta |
+|----|------|------|------|
+| S1 | Mantenimiento permite pasar a mano a En ruta | Detectada · 10 pruebas fallan | `VehicleServiceStateTransitionTests.AVehicleThatCannotOperate_CannotBeSentStraightEnRoute` |
+| S2 | En ruta libera al vehículo aunque tenga otro viaje activo | Detectada · 14 pruebas fallan | `DeliveryRouteServiceVehicleReleaseTests.EndingARoute_KeepsTheVehicleEnRoute_WhileAnotherActiveRouteUsesIt` |
+| S3 | Empezar un viaje ya no deja al vehículo En ruta | Detectada · 28 pruebas fallan | `DeliveryRouteServiceAssignmentTests.StartingATrip_StillMarksTheVehicleEnRoute` |
+| S4 | VehicleService asigna el estado sin preguntar al State | Detectada · 11 pruebas fallan | `VehicleServiceStateTransitionTests.AVehicleThatCannotOperate_CannotBeSentStraightEnRoute` |
+| S5 | ActiveTrips sigue viajes de cualquier vehículo que no esté fuera de servicio | Detectada · 15 pruebas fallan | `SimulatorTelemetryIntegrationTests.AVehicleThatIsNotEnRoute_PublishesNothing_EvenIfItsRouteIsActive` |
+| S6 | El validador de asignación ya no rechaza vehículos que no pueden operar | Detectada · 21 pruebas fallan | `RouteAssignmentValidatorTests.NewRoute_VehicleThatIsNotOperational_IsRejected` |
+| S7 | Fuera de servicio pasa a poder operar | Detectada · 9 pruebas fallan | `VehicleStateBehaviorTests.EachState_DeclaresWhatItAllows` |
+| S8 | Registrar un mantenimiento ya no saca al vehículo del taller | Detectada · 5 pruebas fallan | `VehicleStateMaintenanceRegistrationTests.EachState_DecidesWhatARegisteredMaintenanceDoesToTheVehicle` |
+| S9 | MaintenanceService vuelve a decidir por su cuenta, sin preguntar al estado | Detectada · 2 pruebas fallan | `VehicleStateMaintenanceRegistrationTests.TheService_UsesTheResolverItIsGiven_ToDecideWhatHappensToTheVehicle` |
+| S10 | Registrar un mantenimiento libera a cualquier vehículo (también al En ruta y al Fuera de servicio) | Detectada · 5 pruebas fallan | `VehicleStateMaintenanceRegistrationTests.EachState_DecidesWhatARegisteredMaintenanceDoesToTheVehicle` |
+| S11 | Pedir el estado en el que ya está deja de ser inofensivo (se rechaza) | Detectada · 8 pruebas fallan | `VehicleServiceStateTransitionTests.AnAllowedChange_IsStored_Audited_AndNotified` |
+| S12 | El cambio manual deja de validar la tabla de transiciones | Detectada · 16 pruebas fallan | `VehicleServiceStateTransitionTests.AVehicleThatCannotOperate_CannotBeSentStraightEnRoute` |
+| S13 | Terminar un viaje libera a cualquier vehículo (también al de Mantenimiento y Fuera de servicio) | Detectada · 24 pruebas fallan | `DeliveryRouteServiceAssignmentTests.FinishingOrCancelling_OnlyReleasesAVehicleThatWasEnRoute` |
+
+**Conclusión: 13 de 13 roturas detectadas; ninguna sobrevivió.** Cada rotura se comparó contra la suite completa (1438 pruebas); «detectada» significa que la compilación falló, que al menos una prueba falló o que la ejecución se interrumpió.
+
+### 8.20 Visitor — analizar la flota sin cargar las entidades con análisis
+
+La flota está hecha de cosas de **tipos distintos** —vehículos, rutas de reparto y registros de mantenimiento— y quien administra
+quiere preguntas que las cruzan: ¿cuántos vehículos están realmente en uso?, ¿cuántos kilómetros hay planificados, en curso y
+completados?, ¿qué vehículos nunca tuvieron mantenimiento?, ¿qué ruta en curso no va a poder avanzar? Cada pregunta nueva obligaría a
+agregar métodos de análisis a las entidades o a engordar un servicio con un `switch` por tipo. El **Visitor** separa el análisis de los
+objetos que se analizan: cada pregunta es una clase (un *visitante*) y los elementos solo saben **aceptar** visitantes.
+
+#### 1. Descripción del patrón
+
+Visitor representa una operación que se ejecuta sobre los elementos de una estructura de objetos, sin modificar las clases de esos
+elementos. Cada elemento implementa un método `Accept(visitor)` que llama al método del visitante que corresponde a **su** tipo
+(`visitor.VisitVehicle(this)`, `visitor.VisitRoute(this)`…): es el **doble despacho**, y por eso el visitante recibe cada elemento con su
+tipo concreto sin `if`, `switch` ni conversiones. Agregar una operación nueva es escribir un visitante nuevo. Aquí hay tres tipos de
+elemento (vehículo, ruta y mantenimiento), una estructura que los reúne y los recorre, y cuatro visitantes concretos.
+
+#### 2. Justificación de su utilización
+
+| Problema real del proyecto | Cómo lo resuelve el Visitor |
+|----------------------------|-----------------------------|
+| Los análisis de la flota cruzan datos de tres entidades; si vivieran en ellas, `Vehicle`, `DeliveryRoute` y `MaintenanceRecord` acabarían conociendo análisis que no les corresponden. | Las entidades **no se tocan**: el análisis ve **adaptadores** inmutables (`VehicleElement`, `RouteElement`, `MaintenanceRecordElement`) que copian lo que necesita. |
+| Cada análisis nuevo (utilización, distancias, historial, hallazgos) tendría que recorrer la flota con su propio `switch` por tipo. | Un visitante por análisis; la estructura recorre una sola vez y cada elemento decide qué método del visitante se ejecuta. |
+| Conviene que agregar un quinto análisis no obligue a modificar nada de lo existente. | Es una clase más (un `FleetVisitor<T>`); los elementos y la estructura no cambian (una prueba lo demuestra con un visitante nuevo). |
+| Las reglas de «qué vehículo puede operar» ya viven en los estados (8.19); repetirlas en el análisis las duplicaría. | Los visitantes **le preguntan al estado** (`CanOperate`, `CanTrackTrip`, `OperationBlockReason`) y reutilizan sus mensajes. |
+
+**Por qué no es otro Decorator.** El proyecto ya tiene un Decorator para los reportes ([8.8](#88-decorator-de-reportes-y-facade-del-resumen)).
+Los dos patrones resuelven problemas distintos y no comparten código:
+
+| | **Decorator de reportes** (8.8) | **Visitor** (8.20) |
+|---|---|---|
+| Problema | Componer **un** reporte apilando secciones: cada decorador envuelve al anterior y le suma la suya. | Ejecutar **operaciones nuevas** sobre elementos de **tipos distintos** sin modificarlos. |
+| Estructura | Una cadena de objetos que implementan la misma interfaz (`IFleetReportGenerator`). | Elementos que aceptan visitantes + una estructura que los recorre. |
+| Agregar algo nuevo | Otro decorador (otra sección del reporte). | Otro visitante (otro análisis). |
+| Qué ve | Los datos que cada decorador lee para armar su sección. | Una foto inmutable de vehículos, rutas y mantenimientos. |
+| Salida | Un reporte con secciones. | Un resultado propio por visitante. |
+
+El análisis **no usa** `IFleetReportGenerator` ni sus decoradores, y los reportes no saben que el análisis existe: ningún tipo de un
+espacio de nombres referencia al del otro (una prueba de diseño lo vigila), y `ReportsController` y su cadena **no se modificaron**.
+
+**Qué le toca a cada patrón (no se duplican responsabilidades):**
+
+| Patrón | Responsabilidad que **conserva** | Qué hace el Visitor en esa frontera |
+|--------|----------------------------------|-------------------------------------|
+| **Decorator de reportes y Facade** | Componer el reporte por secciones y el resumen del dashboard. | Nada: es un análisis aparte, con su propio servicio y endpoint. |
+| **State** ([8.19](#819-state--qué-puede-hacer-un-vehículo-según-su-estado)) | Decidir qué permite cada estado. | **Pregunta** al estado; no copia sus reglas. |
+| **Iterator** ([8.15](#815-iterator--recorrer-la-carga-de-una-ruta-sin-conocer-su-estructura)) | Recorrer la carga de una ruta. | Nada: la estructura del Visitor recorre elementos de la flota, no la carga. |
+| **Observer** ([8.18](#818-observer--publicar-la-telemetría-del-recorrido-sin-que-el-simulador-sepa-quién-escucha)) | Publicar la telemetría. | Nada: el análisis lee los repositorios en el momento de la petición. |
+
+#### 3. Ubicación de la implementación
+
+| Archivo | Qué contiene |
+|---------|--------------|
+| `src/FleetManagement.Application/Analysis/IFleetElement.cs` | El **Element**: un único método, `Accept`. |
+| `src/FleetManagement.Application/Analysis/IFleetVisitor.cs` | El **Visitor** (un método por tipo de elemento) y su variante `IFleetVisitor<TResult>` con `Result`. |
+| `src/FleetManagement.Application/Analysis/FleetVisitor.cs` | Base de los visitantes concretos: ignora por defecto cada tipo, para que cada uno sobrescriba solo los que le interesan. |
+| `src/FleetManagement.Application/Analysis/FleetElements.cs` | Los tres **elementos concretos**, como adaptadores: `VehicleElement`, `RouteElement`, `MaintenanceRecordElement`. |
+| `src/FleetManagement.Application/Analysis/FleetElementStructure.cs` | La **estructura de objetos**: construye los elementos a partir de las entidades y los recorre. |
+| `src/FleetManagement.Application/Analysis/VehicleUtilizationVisitor.cs` | Visitante 1: utilización de los vehículos. |
+| `src/FleetManagement.Application/Analysis/RouteDistanceVisitor.cs` | Visitante 2: recorridos y distancias. |
+| `src/FleetManagement.Application/Analysis/MaintenanceHistoryVisitor.cs` | Visitante 3: historial de mantenimiento. |
+| `src/FleetManagement.Application/Analysis/OperationalInsightsVisitor.cs` y `OperationalInsight.cs` | Visitante 4: hallazgos operativos; códigos, severidades y umbrales. |
+| `src/FleetManagement.Application/Analysis/MaintenanceMileage.cs`, `ActiveRouteVehicles.cs` | Dos reglas únicas que comparten visitantes (kilómetros desde el último mantenimiento; qué vehículos tienen una ruta en curso), para no escribirlas dos veces. |
+| `src/FleetManagement.Application/DTOs/FleetAnalysisDtos.cs` | Los resultados que entrega cada visitante (registros). |
+| `src/FleetManagement.Application/Interfaces/Services/IFleetAnalysisService.cs`, `Services/FleetAnalysisService.cs` | El caso de uso: lee, adapta y pasa un visitante por análisis. |
+| `src/FleetManagement.Api/Controllers/AnalysisController.cs` | `GET api/analysis/fleet`. |
+| **Modificado:** `src/FleetManagement.Api/Program.cs` | Un solo registro (ver la sección 7). **Ninguna entidad, servicio, controlador ni reporte existente se modificó.** |
+| Pruebas: `tests/FleetManagement.Application.Tests/Visitor/` | 7 archivos de pruebas y `FleetData.cs` (datos de prueba). |
+
+#### 4. Diagrama UML
+
+```mermaid
+classDiagram
+    direction LR
+    class IFleetElement {
+        <<interface>>
+        +Accept(visitor)
+    }
+    class VehicleElement {
+        <<record>>
+    }
+    class RouteElement {
+        <<record>>
+        +IsActive bool
+    }
+    class MaintenanceRecordElement {
+        <<record>>
+    }
+    class IFleetVisitor {
+        <<interface>>
+        +VisitVehicle(vehicle)
+        +VisitRoute(route)
+        +VisitMaintenanceRecord(record)
+    }
+    class IFleetVisitorResult["IFleetVisitor#lt;TResult#gt;"] {
+        <<interface>>
+        +Result TResult
+    }
+    class FleetVisitorBase["FleetVisitor#lt;TResult#gt;"] {
+        <<abstract>>
+    }
+    class VehicleUtilizationVisitor
+    class RouteDistanceVisitor
+    class MaintenanceHistoryVisitor
+    class OperationalInsightsVisitor
+    class FleetElementStructure {
+        <<sealed>>
+        +Build(vehicles, routes, records)$
+        +Accept(visitor)
+        +Analyze(visitor) TResult
+        +Count() int
+    }
+    class FleetAnalysisService
+    class Vehicle
+    class DeliveryRoute
+    class MaintenanceRecord
+    class IVehicleStateResolver {
+        <<interface>>
+    }
+    IFleetElement <|.. VehicleElement
+    IFleetElement <|.. RouteElement
+    IFleetElement <|.. MaintenanceRecordElement
+    IFleetVisitor <|-- IFleetVisitorResult
+    IFleetVisitorResult <|.. FleetVisitorBase
+    FleetVisitorBase <|-- VehicleUtilizationVisitor
+    FleetVisitorBase <|-- RouteDistanceVisitor
+    FleetVisitorBase <|-- MaintenanceHistoryVisitor
+    FleetVisitorBase <|-- OperationalInsightsVisitor
+    IFleetElement ..> IFleetVisitor : Accept llama a VisitX(this)
+    FleetElementStructure o-- IFleetElement : reúne y recorre
+    FleetElementStructure ..> Vehicle : lee y adapta
+    FleetElementStructure ..> DeliveryRoute : lee y adapta
+    FleetElementStructure ..> MaintenanceRecord : lee y adapta
+    FleetAnalysisService --> FleetElementStructure : construye y recorre
+    FleetAnalysisService ..> VehicleUtilizationVisitor : crea uno por análisis
+    VehicleUtilizationVisitor ..> IVehicleStateResolver : le pregunta al estado
+    OperationalInsightsVisitor ..> IVehicleStateResolver : le pregunta al estado
+```
+
+```mermaid
+sequenceDiagram
+    participant API as GET /api/analysis/fleet
+    participant S as FleetAnalysisService
+    participant R as Repositorios
+    participant E as FleetElementStructure
+    participant X as VehicleElement
+    participant V as VehicleUtilizationVisitor
+    participant ST as Estado del vehículo
+    API->>S: AnalyzeFleetAsync()
+    S->>R: lee vehículos, rutas y mantenimientos
+    S->>E: Build(vehículos, rutas, mantenimientos)
+    Note over E: adapta cada entidad a un elemento inmutable y fija el orden
+    S->>E: Analyze(new VehicleUtilizationVisitor(estados))
+    loop cada elemento, en orden
+        E->>X: Accept(visitante)
+        X->>V: VisitVehicle(this)
+        Note over X,V: doble despacho, el elemento elige el método
+        V->>V: acumula lo que le interesa
+    end
+    E->>V: Result
+    V->>ST: CanOperate
+    V-->>S: VehicleUtilizationDto
+    Note over S: repite lo mismo con los otros tres visitantes
+    S-->>API: FleetAnalysisDto
+```
+
+#### 5. Interfaces y clases participantes
+
+| Rol del patrón | Clase o interfaz | Responsabilidad |
+|----------------|------------------|-----------------|
+| **Element** | `IFleetElement` | Cualquier cosa de la flota que se puede analizar. Su único método, `Accept(IFleetVisitor)`, hace el doble despacho. |
+| **Concrete Element** (adaptador) | `VehicleElement` | Presenta un vehículo como elemento analizable: copia id, placa, tipo, estado y kilometraje. `Accept` llama a `VisitVehicle(this)`. |
+| **Concrete Element** (adaptador) | `RouteElement` | Presenta una ruta: id, nombre, estado, vehículo asignado, distancia estimada, número de paradas, duración y retraso. Sabe si está en curso (`IsActive`: en progreso o retrasada). Llama a `VisitRoute(this)`. |
+| **Concrete Element** (adaptador) | `MaintenanceRecordElement` | Presenta un mantenimiento realizado: id, vehículo, tipo, fecha y kilometraje. Llama a `VisitMaintenanceRecord(this)`. |
+| **Visitor** | `IFleetVisitor` | Un método por tipo de elemento: `VisitVehicle`, `VisitRoute`, `VisitMaintenanceRecord`. |
+| **Visitor** (con resultado) | `IFleetVisitor<TResult>` | Agrega `Result`. Separado del anterior (ISP): la estructura solo recorre y acepta, no sabe qué devuelve cada análisis. |
+| **Visitor base** | `FleetVisitor<TResult>` | Ignora por defecto cada tipo de elemento; no contiene lógica de análisis. |
+| **Concrete Visitor 1** | `VehicleUtilizationVisitor` | Visita vehículos y rutas: cuántos vehículos pueden operar, cuántos están en uso, kilometraje total y promedio, reparto por tipo. |
+| **Concrete Visitor 2** | `RouteDistanceVisitor` | Visita solo rutas: kilómetros completados, en curso y planificados, ruta más larga, promedio y retrasos acumulados. |
+| **Concrete Visitor 3** | `MaintenanceHistoryVisitor` | Visita vehículos y mantenimientos: cuántos de cada tipo, qué vehículos nunca tuvieron uno, el último de cada vehículo, kilómetros desde entonces y promedio entre mantenimientos. |
+| **Concrete Visitor 4** | `OperationalInsightsVisitor` | Visita los tres tipos y los cruza: señala lo que un operador debe atender, del más al menos urgente. |
+| **Object Structure** | `FleetElementStructure` | Reúne los elementos y sabe recorrerlos (`Accept`, `Analyze`). Se construye una vez por análisis con `Build` y no cambia. Orden determinista: vehículos por placa, rutas por nombre y mantenimientos por fecha. |
+| **Cliente** | `FleetAnalysisService` | Lee los repositorios, construye la estructura y le pasa **un visitante por análisis**. No contiene ningún cálculo. |
+| **Entidades** (no se modifican) | `Vehicle`, `DeliveryRoute`, `MaintenanceRecord` | Se adaptan a elementos; no conocen a los visitantes. |
+
+#### 6. Funcionamiento dentro del sistema
+
+**Los cuatro análisis.**
+
+| Visitante | Visita | Qué responde (resultado) |
+|-----------|--------|--------------------------|
+| `VehicleUtilizationVisitor` | vehículos, rutas | Total y operables (los decide el estado), **en uso** (operables con una ruta en curso), porcentaje de utilización, kilometraje total y promedio, y el desglose por tipo (siempre aparecen todos los tipos). |
+| `RouteDistanceVisitor` | rutas | Distancia total, completada, en curso y planificada; promedio; ruta más larga; rutas retrasadas y minutos de retraso; desglose por estado. **Las rutas canceladas no suman** a los totales (no se recorren) pero el desglose las muestra aparte. |
+| `MaintenanceHistoryVisitor` | vehículos, mantenimientos | Total y por tipo; vehículos con y sin historial; por vehículo, el último mantenimiento y los km desde entonces; promedio de km entre mantenimientos consecutivos (un intervalo negativo, dato mal cargado, se ignora). |
+| `OperationalInsightsVisitor` | vehículos, rutas, mantenimientos | Los hallazgos de la tabla siguiente. |
+
+**Hallazgos operativos** (los códigos son estables; el mensaje es para leer). Salen ordenados por severidad, luego por código y luego
+por sujeto:
+
+| Código | Severidad | Cuándo se emite |
+|--------|-----------|-----------------|
+| `ActiveRouteWithoutOperableVehicle` | Critical | Ruta en curso sin vehículo, con un vehículo que ya no existe, o cuyo vehículo **no puede operar** (el motivo lo da su estado). |
+| `ActiveRouteVehicleNotEnRoute` | Warning | Ruta en curso cuyo vehículo opera pero **no está En ruta** (por ejemplo, alguien lo dejó Disponible a mano): nada la mueve. |
+| `ActiveRouteDelayed` | Warning | Ruta en curso con un retraso de 30 minutos o más (umbral configurable). |
+| `PlannedRouteVehicleNotOperable` | Warning | Ruta planificada cuyo vehículo no puede operar (con el motivo del estado) o ya no existe. |
+| `EnRouteVehicleWithoutActiveRoute` | Warning | Vehículo En ruta sin ninguna ruta en curso: la simulación no lo mueve. |
+| `ServiceDistanceExceeded` | Warning | Vehículo con 10 000 km o más desde su último mantenimiento (o desde siempre, si nunca tuvo uno). |
+| `PlannedRouteWithoutVehicle` | Info | Ruta planificada sin vehículo asignado. |
+
+Los umbrales (30 minutos y 10 000 km) tienen nombre y valor por defecto en `InsightThresholds` y se pueden cambiar sin tocar al visitante.
+El análisis de historial **describe**; no decide qué mantenimiento está vencido, porque eso es del módulo predictivo
+(`IMaintenanceService`) y no se duplica.
+
+**El doble despacho, en código** (extractos literales de `Application/Analysis/`):
+
+```csharp
+// FleetElements.cs — cada elemento le dice al visitante cuál de sus métodos ejecutar
+public sealed record VehicleElement(Guid Id, string LicensePlate, VehicleType Type, VehicleStatus Status, double MileageKm) : IFleetElement
+{
+    public static VehicleElement From(Vehicle vehicle) { /* copia los datos que el análisis necesita */ }
+
+    public void Accept(IFleetVisitor visitor) => visitor.VisitVehicle(this);
+}
+```
+
+```csharp
+// FleetElementStructure.cs — la estructura solo ofrece cada elemento y entrega el resultado; no sabe qué hace cada visitante
+public void Accept(IFleetVisitor visitor)
+{
+    ArgumentNullException.ThrowIfNull(visitor);
+
+    foreach (var element in _elements)
+        element.Accept(visitor);
+}
+
+public TResult Analyze<TResult>(IFleetVisitor<TResult> visitor)
+{
+    Accept(visitor);
+    return visitor.Result;
+}
+```
+
+```csharp
+// FleetAnalysisService.cs — un visitante por análisis, todos sobre los mismos elementos
+var structure = FleetElementStructure.Build(vehicles, routes, records);
+
+return new FleetAnalysisDto(
+    _clock.GetUtcNow(),
+    new AnalyzedElementsDto(structure.Count<VehicleElement>(), structure.Count<RouteElement>(), structure.Count<MaintenanceRecordElement>()),
+    structure.Analyze(new VehicleUtilizationVisitor(_vehicleStates)),
+    structure.Analyze(new RouteDistanceVisitor()),
+    structure.Analyze(new MaintenanceHistoryVisitor()),
+    structure.Analyze(new OperationalInsightsVisitor(_vehicleStates, _thresholds)));
+```
+
+```csharp
+// VehicleUtilizationVisitor.cs — qué hace con lo que visita, y a quién le pregunta si un vehículo puede operar
+public override void VisitVehicle(VehicleElement vehicle) => _vehicles[vehicle.Id] = vehicle;
+
+public override void VisitRoute(RouteElement route) => _routes[route.Id] = route;
+
+// ... al armar el resultado:
+var operable = _vehicles.Values.Count(vehicle => _states.For(vehicle.Status).CanOperate);
+```
+
+**Propiedades que se cuidaron** (todas con pruebas):
+
+- **Elementos inmutables que copian los datos.** El análisis ve una foto coherente aunque la simulación siga moviendo vehículos, y
+  un visitante no puede modificar una entidad aunque quisiera (los elementos no guardan referencias a las entidades).
+- **El resultado no depende del orden ni de visitar dos veces.** Cada visitante guarda lo visitado por id y calcula al leer
+  `Result`: visitar el mismo elemento dos veces no lo cuenta dos veces.
+- **Un visitante, un análisis.** Los visitantes acumulan estado mientras recorren, por eso se usa uno por análisis y no se comparten
+  entre peticiones ni entre hilos.
+- **Solo lectura.** El análisis no cambia datos, ni auditoría, ni notificaciones (una prueba lo comprueba).
+
+**Cuándo cuesta agregar algo.** Un análisis nuevo es un visitante nuevo y no toca nada existente. En cambio, un **tipo de elemento**
+nuevo obliga a agregar un método a `IFleetVisitor` (el compromiso conocido de este patrón); por eso el conjunto de elementos es
+cerrado y deliberado (tres tipos, una prueba lo fija) y la base `FleetVisitor<T>` reduce el impacto con métodos que no hacen nada por defecto.
+
+#### 7. Integración con los demás componentes
+
+**Cambios en archivos existentes: uno solo**, `Api/Program.cs`, con un registro. Ninguna entidad, servicio, repositorio, controlador ni
+reporte existente se modificó.
+
+```csharp
+builder.Services.AddScoped<IFleetAnalysisService, FleetAnalysisService>();
+```
+
+| Pieza | Ciclo de vida | Por qué |
+|-------|---------------|---------|
+| `IFleetAnalysisService` → `FleetAnalysisService` | **Scoped** | Es un caso de uso sin estado propio, como los demás servicios de aplicación. Lee repositorios y el resolutor de estados (ambos Singleton) y el reloj (`TimeProvider`, Singleton, ya registrado): no captura ninguna dependencia de vida más corta. |
+| Los cuatro visitantes | **No se registran** | Acumulan estado mientras recorren: un visitante Singleton o Scoped mezclaría los resultados de análisis o de peticiones distintas. Si se registraran tendrían que ser **Transient**; como el servicio los crea con sus propios parámetros (el resolutor y los umbrales), no hay nada que inyectar. |
+| `FleetElementStructure` y los elementos | **No se registran** | Se construyen en cada petición con los datos de ese momento (una foto) y son inmutables. |
+| `InsightThresholds` | Opcional (no se registra) | El constructor lo recibe como parámetro opcional: sin registro se usan los valores por defecto (30 min y 10 000 km). |
+
+**Con el resto del sistema.** El análisis lee los repositorios de vehículos, rutas y mantenimientos (los mismos que usan los demás
+servicios) y consulta los estados por `IVehicleStateResolver` (8.19). Refleja lo que dejaron los otros patrones: un vehículo que el
+Mediator liberó al completarse una ruta aparece Disponible, y uno que un administrador mandó al taller aparece sin poder operar (una
+prueba hace ambas cosas con los servicios reales).
+
+**Endpoint.** `GET /api/analysis/fleet` (nuevo; de lectura y sin rol, igual que los reportes y la consulta de vehículos). Devuelve
+`generatedAt`, `elements` (cuántos elementos de cada tipo se analizaron), `utilization`, `routes`, `maintenance` e `insights`.
+
+**Qué no cambió.** El generador de reportes y su cadena de Decorators, `ReportsController`, el Facade del dashboard, el módulo
+predictivo de mantenimiento, el Iterator de la carga y todas las entidades de dominio.
+
+#### 8. Principios SOLID aplicados
+
+| Principio | Cómo se cumple |
+|-----------|----------------|
+| **S** — Responsabilidad única | Cada visitante es **un** análisis; la estructura solo reúne y recorre; los elementos solo adaptan y aceptan; el servicio solo orquesta; el controlador solo sirve HTTP. |
+| **O** — Abierto/Cerrado | Un análisis nuevo es un visitante nuevo: los elementos, la estructura y los demás visitantes no cambian (una prueba define un visitante nuevo y lo ejecuta sin tocar nada). Lo que sí obliga a cambiar es agregar un **tipo de elemento**; por eso ese conjunto es cerrado a propósito. |
+| **L** — Sustitución de Liskov | La estructura acepta cualquier `IFleetVisitor<T>` sin conocer cuál es; los visitantes sobrescriben solo lo que necesitan y la base ignora el resto, sin alterar el recorrido. |
+| **I** — Segregación de interfaces | Tres contratos pequeños: `IFleetElement` (aceptar), `IFleetVisitor` (visitar cada tipo) e `IFleetVisitor<TResult>` (entregar un resultado). La estructura depende solo del segundo. |
+| **D** — Inversión de dependencias | Los visitantes dependen de `IVehicleStateResolver`; el servicio, de las interfaces de repositorio, del resolutor y de `TimeProvider`. Una excepción deliberada: el servicio crea sus visitantes con `new`, porque acumulan estado, son parte del algoritmo y no una dependencia externa; inyectar una fábrica agregaría una abstracción sin una segunda implementación. |
+
+#### 9. Pruebas de funcionamiento
+
+Carpeta `tests/FleetManagement.Application.Tests/Visitor/` — **135 pruebas**, sin librerías de mocking:
+
+| Archivo | Pruebas | Qué demuestra |
+|---------|--------:|----------------|
+| `OperationalInsightsVisitorTests.cs` | 47 | Cada regla de hallazgo con su severidad, su mensaje y su umbral (desde el límite exacto); que un vehículo bloqueado sale una sola vez y como crítico; que el motivo lo da el estado (con un estado alternativo); ordenamiento por urgencia; umbrales configurables; sin dependencia del orden ni de visitar dos veces. |
+| `FleetElementsTests.cs` | 23 | **Adaptadores**: copian lo que el análisis necesita, son una foto que no sigue a la entidad, no guardan referencias a ella y no la modifican; **doble despacho**: cada elemento llama al método de su propio tipo, una sola vez; la estructura ordena, cuenta y recorre; un visitante nuevo no requiere cambiar elementos ni estructura. |
+| `FleetAnalysisServiceTests.cs` | 15 | **Integración con datos reales**: el servicio con los repositorios y servicios de la aplicación (rutas con su Mediator, vehículos con su State); el análisis refleja cambiar el estado de un vehículo y completar un viaje; no cambia datos, auditoría ni avisos; cada repositorio se lee una vez; cada llamada crea sus propios visitantes. |
+| `VehicleUtilizationVisitorTests.cs` | 14 | Totales, por vehículo, desglose por tipo (con ceros), quién opera lo decide el estado, redondeos, flota vacía. |
+| `MaintenanceHistoryVisitorTests.cs` | 14 | Totales y por tipo, último mantenimiento y km desde él, promedio entre mantenimientos consecutivos, intervalos negativos descartados, vehículos sin historial, registros de un vehículo desconocido. |
+| `RouteDistanceVisitorTests.cs` | 11 | Las rutas canceladas no suman a totales, promedio, más larga ni retrasos; desglose por estado; orden; redondeos; sin rutas. |
+| `VisitorDesignTests.cs` | 11 | Pruebas de arquitectura (revisan las **firmas** de los tipos): `Analysis` solo depende del dominio, de los estados y de los DTO de resultado; los visitantes nunca nombran una entidad; **no es otro Decorator** (no envuelve ni toca los reportes); el contrato tiene un método por tipo; el conjunto de elementos es cerrado; todo visitante entrega un DTO; el servicio crea sus visitantes por análisis. |
+
+**Comandos exactos** (desde la raíz de la solución, `FleetManagementSystem/`):
+
+```bash
+dotnet test --filter "FullyQualifiedName~FleetManagement.Application.Tests.Visitor"
+dotnet test                       # toda la suite: las anteriores y las nuevas
+```
+
+#### 10. Evidencias de ejecución
+
+*(Todo lo que sigue es salida real; el origen y la forma de reproducirlo están en la [sección 12](#12-pruebas-automatizadas-y-cómo-demostrar-el-factory-method).)*
+
+**a) Resultado de las pruebas** (ejecutor compatible con xUnit; ver las limitaciones en la [sección 11](#11-limitaciones-conocidas-del-prototipo)):
+
+```
+Carpeta/namespace             Total     OK  Fallos  Omitidas
+ReportDecorator                 46     46       0         0     (sin modificar: los reportes siguen igual)
+Visitor                        135    135       0         0
+```
+
+**b) Análisis de la flota con la API en marcha** (Development, datos de demostración y la simulación acelerada ×5). Respuesta real de
+`GET /api/analysis/fleet` (se muestran los totales; se omiten `generatedAt` y las listas `byType`, `vehicles`, `byStatus` y `routes`, que
+repiten el detalle):
+
+```json
+{
+  "elements":    { "vehicles": 5, "routes": 3, "maintenanceRecords": 4 },
+  "utilization": { "totalVehicles": 5, "operableVehicles": 4, "inUseVehicles": 1, "utilizationPercent": 25,
+                   "totalMileageKm": 233996.955, "averageMileageKm": 46799.391 },
+  "routes":      { "totalRoutes": 3, "totalDistanceKm": 682.15, "completedDistanceKm": 9.5, "activeDistanceKm": 287.65,
+                   "plannedDistanceKm": 385, "averageDistanceKm": 227.383, "delayedRoutes": 0, "totalDelayMinutes": 0 },
+  "maintenance": { "totalRecords": 4, "vehiclesWithRecords": 4, "vehiclesWithoutRecords": ["VAN-002"] }
+}
+```
+
+Las cifras se pueden verificar a mano: 9.5 + 287.65 + 385 = 682.15 km; 682.15 / 3 rutas = 227.383 km; 1 vehículo en uso de 4 operables = 25 %.
+Los hallazgos de esa misma respuesta, del más al menos urgente:
+
+```json
+[
+  { "code": "EnRouteVehicleWithoutActiveRoute", "severity": "Warning", "subject": "CAR-003",
+    "message": "El vehículo CAR-003 figura En ruta pero no tiene ninguna ruta en curso: la simulación no lo mueve." },
+  { "code": "ServiceDistanceExceeded", "severity": "Warning", "subject": "VAN-002",
+    "message": "El vehículo VAN-002 no tiene ningún mantenimiento registrado y lleva 18346.955 km (umbral: 10000 km)." },
+  { "code": "ServiceDistanceExceeded", "severity": "Warning", "subject": "VAN-005",
+    "message": "El vehículo VAN-005 lleva 89250 km desde su último mantenimiento (umbral: 10000 km)." },
+  { "code": "PlannedRouteWithoutVehicle", "severity": "Info", "subject": "Ruta Bucaramanga - Bogotá",
+    "message": "La ruta planificada 'Ruta Bucaramanga - Bogotá' todavía no tiene vehículo asignado." }
+]
+```
+
+**c) El análisis reacciona al estado del vehículo** (mismo recorrido). Alguien deja a `TRK-001` «Disponible» a mano mientras su ruta sigue
+en marcha (En ruta → Disponible está permitido): el análisis lo avisa.
+
+```json
+{ "code": "ActiveRouteVehicleNotEnRoute", "severity": "Warning", "subject": "Ruta de evidencia TRK-001",
+  "message": "La ruta 'Ruta de evidencia TRK-001' está en curso pero su vehículo TRK-001 no está En ruta (estado: Available): la simulación no la mueve." }
+```
+
+Después se manda a `TRK-001` al taller con la ruta aún en curso: el hallazgo pasa a **crítico** y **el motivo lo dice el estado** del vehículo
+(es el mismo mensaje que usan las reglas de asignación):
+
+```json
+{ "code": "ActiveRouteWithoutOperableVehicle", "severity": "Critical", "subject": "Ruta de evidencia TRK-001",
+  "message": "La ruta 'Ruta de evidencia TRK-001' está en curso pero no puede avanzar. El vehículo TRK-001 está en mantenimiento; no se puede usar en una ruta." }
+```
+
+**d) Pruebas de mutación** (se rompieron a propósito 9 reglas del código del Visitor, de a una, en una copia; ver el detalle y el
+resultado en la [sección 12](#12-pruebas-automatizadas-y-cómo-demostrar-el-factory-method)):
+
+| Id | Rotura deliberada (se aplicó de a una, en una copia) | Resultado | Una de las pruebas que la detecta |
+|----|------|------|------|
+| V1 | Las rutas canceladas cuentan en los totales de distancia | Detectada · 3 pruebas fallan | `RouteDistanceVisitorTests.TheTotals_CountOnlyTheRoutesThatWereNotCancelled` |
+| V2 | El uso de vehículos compara el enum en vez de preguntar al estado | Detectada · 2 pruebas fallan | `FleetAnalysisServiceTests.TheService_UsesTheStateResolverItIsGiven` |
+| V3 | El historial acepta intervalos de kilometraje negativos | Detectada · 1 prueba falla | `MaintenanceHistoryVisitorTests.AnIntervalThatWouldBeNegative_IsDiscarded_ItIsADataEntryMistakeNotADistance` |
+| V4 | El umbral de retraso es estricto (> en vez de >=) | Detectada · 1 prueba falla | `OperationalInsightsVisitorTests.ADelayOnAnActiveRoute_IsReportedFromTheThreshold` |
+| V5 | La estructura no ordena los vehículos | Detectada · 2 pruebas fallan | `FleetElementsTests.TheStructure_ListsVehiclesThenRoutesThenRecords_EachInAStableOrder` |
+| V6 | El aviso "ruta en curso con vehículo que no la sigue" nunca se emite | Detectada · 3 pruebas fallan | `FleetAnalysisServiceTests.ALeftoverAvailableVehicleOnAnActiveRoute_ShowsUpAsAWarning` |
+| V7 | Los avisos salen del menos al más urgente | Detectada · 2 pruebas fallan | `FleetAnalysisServiceTests.TheInsights_SayWhatAnOperatorShouldAttendFirst` |
+| V8 | El elemento de vehículo pierde el kilometraje al copiarse (queda en 0) | Detectada · 20 pruebas fallan | `FleetAnalysisServiceTests.TheUtilization_ReflectsTheStatesOfTheRealVehicles` |
+| V9 | La estructura no ofrece las rutas a los visitantes | Detectada · 48 pruebas fallan | `FleetAnalysisServiceTests.TheUtilization_ReflectsTheStatesOfTheRealVehicles` |
+
+**Conclusión: 9 de 9 roturas detectadas; ninguna sobrevivió.** Cada rotura se comparó contra la suite completa (1438 pruebas); «detectada» significa que la compilación falló, que al menos una prueba falló o que la ejecución se interrumpió.
+
 ---
 
 ## 9. Documentación de la API REST
@@ -1665,9 +3018,11 @@ correr el backend. Resumen de endpoints:
 | GET | `/api/fleet/vehicles/{id}` | Detalle de un vehículo | — |
 | GET | `/api/fleet/vehicle-types` | Perfil de cada tipo de vehículo: velocidad máxima, restricciones de navegación y tareas de mantenimiento (Flyweight) | — |
 | GET | `/api/progress` | Avance de **todos** los viajes activos en una sola llamada: porcentaje, km recorridos y restantes, próxima parada, ETA en minutos y puntos de la ruta | — |
+| GET | `/api/monitoring/telemetry` | Última telemetría conocida de cada vehículo que ha estado en viaje desde que arrancó la aplicación (posición, kilometraje, avance, próxima parada, última parada alcanzada y si ya llegó), ordenada por placa. A diferencia de `/api/progress`, **sigue disponible cuando el viaje termina**. Se alimenta de los eventos que publica el simulador (Observer, [8.18](#818-observer--publicar-la-telemetría-del-recorrido-sin-que-el-simulador-sepa-quién-escucha)) | — |
+| GET | `/api/monitoring/telemetry/{vehicleId}` | La misma información de un solo vehículo. 404 si no ha estado en viaje desde que arrancó la aplicación | — |
 | POST | `/api/fleet/vehicles` | Crea un vehículo (Factory Method + Abstract Factory) | Admin |
 | POST | `/api/fleet/vehicles/{id}/clone` | Clona un vehículo plantilla (Prototype) | Admin |
-| PATCH | `/api/fleet/vehicles/{id}/status` | Cambia el estado de un vehículo | Admin |
+| PATCH | `/api/fleet/vehicles/{id}/status` | Cambia el estado de un vehículo. El estado actual decide a cuáles se puede pasar (State, [8.19](#819-state--qué-puede-hacer-un-vehículo-según-su-estado)): responde 400 con el motivo si no se permite (por ejemplo, de Mantenimiento o Fuera de servicio directamente a En ruta) o si el texto no es un estado; 404 si el vehículo no existe | Admin |
 | GET | `/api/drivers` | Lista de conductores | — |
 | GET | `/api/routes` | Lista de rutas | — |
 | GET | `/api/routes/{id}` | Detalle de una ruta | — |
@@ -1702,6 +3057,7 @@ correr el backend. Resumen de endpoints:
 | GET | `/api/audit/logs` | Registro de auditoría (Singleton) | Admin |
 | GET | `/api/reports/fleet` | Reporte de la flota (vehículos y rutas). Con `?sections=Statistics,MaintenanceAlerts,CargoSummary` agrega esas secciones (Decorator) | — |
 | GET | `/api/dashboard/summary` | Resumen general de la flota para el dashboard (Facade) | — |
+| GET | `/api/analysis/fleet` | Análisis de la flota con los datos de este momento: utilización de los vehículos, recorridos y distancias de las rutas, historial de mantenimiento y hallazgos operativos del más al menos urgente (Visitor, [8.20](#820-visitor--analizar-la-flota-sin-cargar-las-entidades-con-análisis)). Es de solo lectura y no reemplaza a `GET /api/reports/fleet` | — |
 
 **Ejemplo: planificar un reparto** (Git Bash; el token sale de `POST /api/auth/login` con `admin` / `Admin123!`):
 
@@ -1787,6 +3143,20 @@ para mantenerlo simple, y quedan documentadas aquí para quien continúe el proy
   Los parámetros están en la [sección 5.3](#53-configuración-de-la-simulación-y-del-caché-de-navegación).
   En un sistema real, esta posición vendría de dispositivos GPS/telemetría reportando
   a la API (o a un broker de mensajes) en lugar de generarse en el servidor.
+- **Telemetría, estados y análisis** ([8.18](#818-observer--publicar-la-telemetría-del-recorrido-sin-que-el-simulador-sepa-quién-escucha),
+  [8.19](#819-state--qué-puede-hacer-un-vehículo-según-su-estado) y
+  [8.20](#820-visitor--analizar-la-flota-sin-cargar-las-entidades-con-análisis)):
+  - El tablero de telemetría (`LiveTelemetryBoard`) es un Singleton **en memoria**, igual que los repositorios: se pierde al reiniciar
+    el proceso y no se comparte entre varias instancias de la API. En producción, la telemetría llegaría de los dispositivos o de un
+    broker, y se guardaría en una base de series de tiempo o en un caché compartido; bastaría con otro `ITelemetryObserver` (registrado
+    en `Program.cs`) y el simulador no cambiaría.
+  - Los observadores se ejecutan de forma síncrona, uno a la vez, en el hilo que está entregando (normalmente el de la simulación).
+    Uno que haga entrada/salida lenta (red, base de datos) debe encolar su trabajo en lugar de hacerlo dentro de `OnTelemetry`, para no
+    atrasar el paso de la simulación.
+  - El estado del vehículo sigue siendo la propiedad `Vehicle.Status`: State no agrega tablas ni columnas, así que el paso a EF Core no cambia
+    por esto. Las transiciones permitidas viven en el código del dominio, no en la base de datos.
+  - `GET /api/analysis/fleet` lee los tres repositorios en cada consulta (como los reportes). Con una base de datos real conviene resolver
+    las agregaciones en consultas o cachear el resultado unos segundos.
 - **CORS:** configurado como `AllowAnyOrigin()` para simplificar la evaluación
   del prototipo desde cualquier origen local. En producción debe restringirse al
   dominio real del frontend.
@@ -1801,8 +3171,12 @@ para mantenerlo simple, y quedan documentadas aquí para quien continúe el proy
   de `NetTopologySuite` (`Point`) y de Swashbuckle, y las pruebas se ejecutaron con un ejecutor mínimo compatible con xUnit
   (solo para esa verificación, no forma parte del proyecto). La API se levantó y se probó por HTTP, y el frontend se probó en
   un navegador sin interfaz (Chromium) con los mosaicos del mapa simulados. Al recibirlo, ejecute `dotnet build` y
-  `dotnet test` (esperado: **1013** pruebas superadas, [sección 12](#12-pruebas-automatizadas-y-cómo-demostrar-el-factory-method))
-  y avise de cualquier diferencia. El frontend no tiene pruebas automatizadas dentro del proyecto.
+  `dotnet test` (esperado: **1438** pruebas superadas: las 1013 anteriores más las 425 de Observer, State y Visitor,
+  [sección 12](#12-pruebas-automatizadas-y-cómo-demostrar-el-factory-method)) y avise de cualquier diferencia. Las secciones 8.18
+  a 8.20 se verificaron con el mismo tipo de arnés (compilación sin NuGet y ejecutor mínimo compatible con xUnit, con
+  NetTopologySuite compilado desde su código fuente y las aserciones de xUnit reales); su API se levantó y se probó por HTTP, y el
+  frontend no se modificó en esa entrega ni se volvió a probar en un navegador. El frontend no tiene pruebas automatizadas dentro
+  del proyecto.
 - El cálculo de "próximo mantenimiento vencido" compara la fecha/kilometraje
   registrados manualmente en cada `MaintenanceRecord`; no hay integración con
   telemetría real del vehículo para el kilometraje actual (se actualiza junto
@@ -1843,12 +3217,33 @@ para mantenerlo simple, y quedan documentadas aquí para quien continúe el proy
 - **Iterator, Mediator y Memento** ([8.15](#815-iterator--recorrer-la-carga-de-una-ruta-sin-conocer-su-estructura), [8.16](#816-mediator--coordinar-el-estado-de-la-ruta-con-el-del-vehículo) y [8.17](#817-memento--volver-al-orden-anterior-de-las-paradas)): el iterador es de un solo uso y no está pensado para
   recorrer un árbol mientras otro proceso lo modifica (cada nodo se lee al visitarlo); `GET /api/routes/{id}/cargo-items` no lo
   consume ninguna pantalla todavía. El Mediator coordina solo la ruta y su vehículo: `VehicleService` (cambio manual del estado) y
-  `MaintenanceService` (registrar un mantenimiento) siguen cambiando el vehículo por su cuenta y sin avisar a las rutas, como antes.
+  `MaintenanceService` (registrar un mantenimiento) siguen sin avisar a las rutas, como antes (desde la
+  [8.19](#819-state--qué-puede-hacer-un-vehículo-según-su-estado) cambian el estado del vehículo preguntándole a State, pero no pasan por el Mediator).
   Una alerta con retraso deja la ruta Retrasada **sin** tocar al vehículo (comportamiento que ya existía y que se conservó a
   propósito; pedir el estado Retrasada por la API sí lo deja En ruta), y sigue sin comprobar el estado anterior de la ruta (una ruta
   ya terminada que recibe una alerta con retraso queda Retrasada). El Memento cubre solo el orden de las paradas y las estimaciones
   al optimizar (no el estado de la ruta, del vehículo ni la carga) y vive en el historial en memoria de cada usuario, que se pierde al
   reiniciar la API.
+- **Observer, State y Visitor** ([8.18](#818-observer--publicar-la-telemetría-del-recorrido-sin-que-el-simulador-sepa-quién-escucha),
+  [8.19](#819-state--qué-puede-hacer-un-vehículo-según-su-estado) y
+  [8.20](#820-visitor--analizar-la-flota-sin-cargar-las-entidades-con-análisis)):
+  - *Observer.* La telemetría solo cubre tres eventos del recorrido (movimiento, parada alcanzada y llegada); no publica alertas ni cambios
+    de estado. El tablero y los observadores viven en memoria y por proceso: `GET /api/monitoring/telemetry` solo conoce a los
+    vehículos que han viajado desde que arrancó la API y se pierde al reiniciarla. La entrega es síncrona y de un evento a la vez: un
+    observador lento atrasa a los demás y al siguiente paso de la simulación. Un observador que falla queda aislado y auditado
+    (categoría «Monitoreo»), pero ese evento no se reintenta; si los observadores se publican eventos entre sí en cadena, a partir
+    de 1000 publicaciones en una misma entrega se descarta el exceso y también se audita. Ninguna pantalla del frontend consume todavía
+    la telemetría.
+  - *State.* El estado se sigue guardando solo en `Vehicle.Status`; no hay historial de transiciones y un cambio rechazado no deja
+    auditoría ni notificación (solo el 400). La tabla de transiciones manuales está en el código, no es configurable. Hay dos cambios
+    de comportamiento respecto a la versión anterior: pasar a mano de Mantenimiento o Fuera de servicio directamente a En ruta, y pedir
+    un número que no es un estado (por ejemplo `"99"`), ahora responden 400 (antes se aceptaban). Algunas comparaciones directas del
+    enumerado se dejaron a propósito porque no deciden comportamiento por estado (se enumeran en 8.19).
+  - *Visitor.* Cada consulta de `GET /api/analysis/fleet` lee y recorre todo (no es incremental ni se cachea). Los umbrales de los
+    hallazgos (30 minutos de retraso y 10 000 km sin mantenimiento) son valores por defecto de `InsightThresholds`: no están en
+    `appsettings.json`. Los hallazgos solo informan; no corrigen nada. Agregar un análisis nuevo es agregar un visitante; agregar un
+    tipo nuevo de elemento a analizar obliga a tocar la interfaz del visitante y a todos los visitantes (la contrapartida conocida del
+    patrón). No hay pantalla que lo consuma todavía.
 - Los endpoints con "—" en la columna "Rol requerido" de la [sección 9](#9-documentación-de-la-api-rest) (todos los `GET`,
   incluido `GET /api/routes/{id}/optimization`, y algunos de escritura como `PATCH /api/routes/{id}/status`) responden sin exigir
   sesión; antes de producción conviene exigirla en todos.
@@ -2026,6 +3421,64 @@ orden irrecuperable en el historial—. En las primeras corridas **sobrevivieron
 2 sobre el redondeo de la lista plana, 3 sobre «guardar de verdad» lo que se cambia (el repositorio en memoria entrega siempre el mismo
 objeto, así que un guardado olvidado no se notaba) y 1 sobre la guarda del deshacer. Agregué pruebas (con repositorios de prueba que
 entregan copias) y las 6 murieron. Es una verificación del desarrollo (ejecutada en el arnés descrito en la [sección 11](#11-limitaciones-conocidas-del-prototipo)),
+no algo que se ejecute con `dotnet test`.
+
+### Pruebas de Observer, State y Visitor (secciones 8.18, 8.19 y 8.20)
+
+Con estas pruebas el total esperado en el mismo proyecto es de **1438**: las 1013 anteriores más 425 nuevas (cada fila de un `[Theory]`
+cuenta como una prueba). **Ningún archivo de pruebas anterior se modificó ni se eliminó**: los servicios y el simulador que cambiaron
+solo ganaron parámetros opcionales al final de su constructor, de modo que las pruebas anteriores que los arman a mano compilan y
+pasan tal cual. Siguen sin usar librerías de mocking: repositorios en memoria reales y dobles escritos a mano.
+
+| Archivo | Qué demuestra |
+|---------|----------------|
+| `State/VehicleStateBehaviorTests.cs` (58) | Cada estado concreto: qué permite, su motivo de bloqueo con los mensajes originales, cómo reacciona a iniciar y terminar un viaje y **la matriz completa de transiciones manuales (16 casos, incluidas las no permitidas)**; que un valor indefinido se rechaza y que los estados son inmutables y compartidos. |
+| `State/VehicleServiceStateTransitionTests.cs` (32) | **Transiciones no permitidas a través del servicio real**: un cambio permitido se guarda, se audita y se notifica; uno rechazado no se guarda, no se audita y no se notifica; texto inválido y vehículo inexistente responden como antes. |
+| `State/VehicleStateMediatorCompatibilityTests.cs` (30) | Compatibilidad con el Mediator: las mismas cuatro reglas desde cada estado inicial, el vehículo que sigue en otro viaje no se libera y un estado alternativo cambia el resultado sin tocar al Mediator. |
+| `State/VehicleStateMaintenanceRegistrationTests.cs` (26) | Qué le hace a cada estado registrar un mantenimiento (solo el taller sale de él) y que el servicio conserva el registro, la fecha, la auditoría y el aviso. |
+| `State/VehicleStateTripTrackingTests.cs` (16) | La simulación solo mueve un viaje mientras la ruta está activa **y** el vehículo En ruta; la simulación y la consulta de avance coinciden. |
+| `State/VehicleStateAssignmentTests.cs` (15) | Las reglas de asignación aceptan o rechazan según lo que el estado permite, con los mismos mensajes. |
+| `State/VehicleStateDesignTests.cs` (11) | Pruebas de arquitectura: exactamente cuatro estados, los componentes consultan al resolutor y nunca a un estado concreto, `Vehicle` conserva su enumerado y no conoce los estados. |
+| `State/VehicleStateLifecycleScenarioTests.cs` (4) | Escenarios completos (un vehículo que va al taller a mitad de un viaje se queda allí cuando el viaje termina). |
+| `Observer/VehicleTelemetryPublisherTests.cs` (27) | Registro y retirada sin duplicados, notificación a todos en orden, **sin recursión** (un evento publicado por un observador se encola), corte de ciclos, aislamiento de fallos con auditoría y **muchos hilos** publicando y suscribiendo. |
+| `Observer/TripTelemetryEventsTests.cs` (18) | Los eventos de un paso (movimiento, paradas en orden, llegada), una parada justo en el extremo del paso (se informa una vez) y que calcularlos no cambia el viaje. |
+| `Observer/LiveTelemetryBoardTests.cs` (16) | El tablero: una entrada por vehículo, la última parada solo dentro del mismo viaje, la llegada conserva los datos, orden por placa e instantáneas inmutables, también con escritores y lectores concurrentes. |
+| `Observer/SimulatorTelemetryIntegrationTests.cs` (16) | **Integración con el simulador real**: un viaje completo publica movimientos, cada parada una vez y una llegada, en orden y después de guardar; el tablero coincide con la consulta de avance; un observador que falla no detiene la simulación. |
+| `Observer/TripAuditObserverTests.cs` (11) | Una línea de auditoría por parada, con el decimal siempre con punto; ni el movimiento ni la llegada se auditan (la llegada ya la audita el servicio de rutas). |
+| `Observer/ObserverDesignTests.cs` (10) | Pruebas de arquitectura: `Monitoring` solo depende de lo que debe, solo la simulación lo conoce, el Observer no se mezcla con el Mediator ni con el Bridge y los eventos son inmutables. |
+| `Visitor/OperationalInsightsVisitorTests.cs` (47) | Cada hallazgo con su severidad, su mensaje y su umbral (desde el límite exacto), el motivo que da el estado, el orden por urgencia y que visitar dos veces o en otro orden no cambia el resultado. |
+| `Visitor/FleetElementsTests.cs` (23) | Los adaptadores copian lo que el análisis necesita y no modifican la entidad; el **doble despacho** (cada elemento llama al método de su tipo, una vez); la estructura ordena, cuenta y recorre. |
+| `Visitor/FleetAnalysisServiceTests.cs` (15) | Integración con datos reales: el análisis refleja cambios de estado y viajes completados, no cambia datos ni auditoría y cada llamada crea sus propios visitantes. |
+| `Visitor/VehicleUtilizationVisitorTests.cs` (14), `MaintenanceHistoryVisitorTests.cs` (14), `RouteDistanceVisitorTests.cs` (11) | Cada visitante concreto: totales, desgloses (con ceros), quién opera lo decide el estado, intervalos negativos descartados, rutas canceladas fuera de los totales, redondeos y datos vacíos. |
+| `Visitor/VisitorDesignTests.cs` (11) | Pruebas de arquitectura: `Analysis` solo depende del dominio, de los estados y de los DTO de resultado; los visitantes nunca nombran una entidad; no es otro Decorator (no toca los reportes). |
+| `Support/ConfigurableStates.cs`, `Support/SignatureDependencies.cs`, `Observer/ObserverTestDoubles.cs`, `Visitor/FleetData.cs` | Apoyo: un estado alternativo para probar que los componentes le preguntan al State, la lectura de las firmas de los tipos para las pruebas de arquitectura, los dobles del Observer y datos de flota con los servicios reales. |
+
+Para ejecutar sólo una parte: `dotnet test --filter "FullyQualifiedName~Application.Tests.State"` (192),
+`...~Application.Tests.Observer` (98) o `...~Application.Tests.Visitor` (135).
+
+**Resultado de la verificación.** En el arnés descrito en la [sección 11](#11-limitaciones-conocidas-del-prototipo) (no es un `dotnet test`
+real), la solución compila con **0 advertencias** y se superan **1438 de 1438 pruebas**: las 1013 anteriores con los mismos nombres y
+cantidades que antes de agregar los tres patrones (ninguna cambió de resultado) y las 425 nuevas (State 192, Observer 98, Visitor 135).
+Además, con la API original y la nueva levantadas a la vez, con los mismos datos de demostración y la simulación detenida, las 33
+consultas `GET` de los endpoints anteriores devolvieron respuestas idénticas (se normalizaron los identificadores y las marcas de
+tiempo, que cambian en cada arranque).
+
+**Pruebas de mutación de Observer, State y Visitor.** Igual que en las versiones anteriores, se rompieron a propósito **36 reglas** del código
+nuevo o reforzado —una por una, en una copia— y se ejecutó cada vez la suite completa (1438 pruebas); una rotura queda «detectada» si la
+compilación falla, si alguna prueba falla o si la ejecución se interrumpe. Las 36 fueron detectadas; ninguna sobrevivió. Por patrón: **State (13)** —que el
+cambio manual valide la tabla de transiciones, que Mantenimiento no pase a mano a En ruta, que En ruta no libere al vehículo con otro viaje activo, que empezar un viaje lo deje En ruta, que
+`VehicleService`, `MaintenanceService`, `ActiveTrips` y el validador de asignación le pregunten al estado, que Fuera de servicio no
+pueda operar, que registrar un mantenimiento solo saque al vehículo del taller, que pedir el mismo estado no se rechace y que terminar
+un viaje no libere a un vehículo en el taller—; **Observer (14)** —sin suscripciones duplicadas, que un observador que falla (o cuyo
+fallo no se puede auditar) no detenga a los demás, que no haya recursión ni entregas simultáneas, que retirar un observador funcione,
+el corte de ciclos, la parada en el extremo del paso, la llegada solo al llegar, que se publique después de guardar, la categoría de
+auditoría y el tablero (última parada, llegada y orden por placa)—; y **Visitor (9)** —rutas canceladas fuera de los totales, el estado
+decide quién opera, intervalos negativos descartados, el umbral de retraso desde el límite exacto, el orden de la estructura y de los
+hallazgos, el hallazgo del vehículo que no sigue su ruta, que el elemento copie el kilometraje y que la estructura ofrezca las rutas—.
+En las corridas intermedias tampoco sobrevivió ninguna (una rotura estaba mal escrita en el propio arnés y se corrigió); el detalle de las
+36, con la prueba que detecta cada una, está en las tablas de las secciones [8.18](#818-observer--publicar-la-telemetría-del-recorrido-sin-que-el-simulador-sepa-quién-escucha),
+[8.19](#819-state--qué-puede-hacer-un-vehículo-según-su-estado) y [8.20](#820-visitor--analizar-la-flota-sin-cargar-las-entidades-con-análisis).
+Es una verificación del desarrollo (ejecutada en el arnés descrito en la [sección 11](#11-limitaciones-conocidas-del-prototipo)),
 no algo que se ejecute con `dotnet test`.
 
 ### Demostración manual / en vivo (sin correr pruebas)

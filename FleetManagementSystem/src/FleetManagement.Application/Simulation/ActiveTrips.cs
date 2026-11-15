@@ -1,5 +1,6 @@
 using FleetManagement.Domain.Entities;
 using FleetManagement.Domain.Enums;
+using FleetManagement.Domain.States;
 
 namespace FleetManagement.Application.Simulation;
 
@@ -10,6 +11,7 @@ public sealed record ActiveTrip(DeliveryRoute Route, Vehicle Vehicle);
 /// Define en un solo lugar qué es un "viaje activo" para que el simulador (que mueve los vehículos) y el servicio de
 /// progreso (que lo informa) nunca discrepen: un vehículo EnRoute cuya ruta asignada está InProgress o Delayed.
 /// Un vehículo EnRoute sin ruta activa no forma parte de ningún viaje, y por eso la simulación no lo mueve.
+/// Qué vehículos pueden seguir un viaje lo dice su estado (patrón STATE, <see cref="IVehicleStateRules.CanTrackTrip"/>).
 /// </summary>
 public static class ActiveTrips
 {
@@ -18,7 +20,7 @@ public static class ActiveTrips
         var activeRoutes = routes.Where(IsActive).ToList();
         var trips = new List<ActiveTrip>();
 
-        foreach (var vehicle in vehicles.Where(IsEnRoute))
+        foreach (var vehicle in vehicles.Where(CanTrackTrip))
         {
             // Si por un error de datos un vehículo tuviera dos rutas activas se sigue la primera: solo está en un lugar.
             var route = activeRoutes.FirstOrDefault(candidate => candidate.AssignedVehicleId == vehicle.Id);
@@ -29,7 +31,7 @@ public static class ActiveTrips
         return trips;
     }
 
-    private static bool IsEnRoute(Vehicle vehicle) => vehicle.Status == VehicleStatus.EnRoute;
+    private static bool CanTrackTrip(Vehicle vehicle) => new VehicleStateContext(vehicle).CanTrackTrip;
 
     private static bool IsActive(DeliveryRoute route)
         => route.Status is DeliveryRouteStatus.InProgress or DeliveryRouteStatus.Delayed;

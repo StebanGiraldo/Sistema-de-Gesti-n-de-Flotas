@@ -4,6 +4,7 @@ using FleetManagement.Application.Interfaces.Repositories;
 using FleetManagement.Application.Interfaces.Services;
 using FleetManagement.Domain.Entities;
 using FleetManagement.Domain.Enums;
+using FleetManagement.Domain.States;
 
 namespace FleetManagement.Application.Assignment;
 
@@ -12,7 +13,8 @@ namespace FleetManagement.Application.Assignment;
 /// (o <c>null</c> si se cumple); el validador junta los mensajes y lanza una sola excepción.
 ///
 /// El estado "vencido" del mantenimiento lo decide <see cref="IMaintenanceService"/> (módulo predictivo): aquí no se
-/// repite esa lógica, así que si el módulo mejora, estas reglas lo aprovechan sin cambios.
+/// repite esa lógica, así que si el módulo mejora, estas reglas lo aprovechan sin cambios. Con el estado del vehículo
+/// pasa lo mismo: si el vehículo puede operar lo dice su estado (patrón STATE), no un <c>switch</c> repetido aquí.
 /// </summary>
 public class RouteAssignmentValidator : IRouteAssignmentValidator
 {
@@ -23,17 +25,20 @@ public class RouteAssignmentValidator : IRouteAssignmentValidator
     private readonly IDriverRepository _driverRepository;
     private readonly IDeliveryRouteRepository _routeRepository;
     private readonly IMaintenanceService _maintenanceService;
+    private readonly IVehicleStateResolver _vehicleStates;
 
     public RouteAssignmentValidator(
         IVehicleRepository vehicleRepository,
         IDriverRepository driverRepository,
         IDeliveryRouteRepository routeRepository,
-        IMaintenanceService maintenanceService)
+        IMaintenanceService maintenanceService,
+        IVehicleStateResolver? vehicleStates = null)
     {
         _vehicleRepository = vehicleRepository;
         _driverRepository = driverRepository;
         _routeRepository = routeRepository;
         _maintenanceService = maintenanceService;
+        _vehicleStates = vehicleStates ?? VehicleStateResolver.Default;
     }
 
     public async Task ValidateNewRouteAsync(Guid? vehicleId, Guid? driverId, IEnumerable<CargoItemDto>? cargo)
@@ -101,12 +106,9 @@ public class RouteAssignmentValidator : IRouteAssignmentValidator
         return new[] { $"El conductor {driver?.FullName ?? "asignado"} ya está en otro viaje activo (ruta '{busyWith.Name}')." };
     }
 
-    private static string? OperabilityViolation(Vehicle vehicle) => vehicle.Status switch
-    {
-        VehicleStatus.Maintenance => $"El vehículo {vehicle.LicensePlate} está en mantenimiento; no se puede usar en una ruta.",
-        VehicleStatus.OutOfService => $"El vehículo {vehicle.LicensePlate} está fuera de servicio; no se puede usar en una ruta.",
-        _ => null
-    };
+    /// <summary>Si el estado del vehículo no le permite operar, el motivo (los mensajes son los de siempre); si puede, <c>null</c>.</summary>
+    private string? OperabilityViolation(Vehicle vehicle)
+        => new VehicleStateContext(vehicle, _vehicleStates).OperationBlockReason();
 
     private async Task<string?> MaintenanceViolationAsync(Vehicle vehicle)
     {

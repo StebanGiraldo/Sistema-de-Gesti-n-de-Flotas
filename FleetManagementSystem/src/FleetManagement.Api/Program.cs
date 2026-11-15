@@ -10,10 +10,12 @@ using FleetManagement.Application.Interfaces;
 using FleetManagement.Application.Interfaces.Repositories;
 using FleetManagement.Application.Interfaces.Services;
 using FleetManagement.Application.Mediators;
+using FleetManagement.Application.Monitoring;
 using FleetManagement.Application.Optimization;
 using FleetManagement.Application.Reports;
 using FleetManagement.Application.Services;
 using FleetManagement.Application.Simulation;
+using FleetManagement.Domain.States;
 using FleetManagement.Infrastructure.BackgroundServices;
 using FleetManagement.Infrastructure.Commands;
 using FleetManagement.Infrastructure.Logging;
@@ -162,6 +164,14 @@ builder.Services.AddScoped<IRouteAssignmentValidator, RouteAssignmentValidator>(
 // entre los servicios. El participante de rutas avisa al mediador y éste dirige al participante de vehículos (ver
 // Application/Mediators). No guardan estado, así que se registran por petición (Scoped) como los servicios que los usan.
 // No hay referencias circulares: servicios → participante de rutas → mediador → participante de vehículos → repositorio.
+// STATE (patrón de comportamiento): lo que depende del estado del vehículo (qué operaciones permite, cómo reacciona a empezar o
+// terminar un viaje o a registrarse un mantenimiento, a qué estados se puede pasar a mano) vive en los objetos de estado de
+// Domain/States. El participante de vehículos del Mediator, el servicio de vehículos, el de mantenimientos, las reglas de
+// asignación y el análisis de la flota (Visitor) los reciben por IVehicleStateResolver; el seguimiento de viajes del simulador
+// (ActiveTrips, una clase estática) usa la misma tabla compartida (VehicleStateResolver.Default). Los estados no guardan datos
+// (son inmutables): una sola tabla compartida por toda la aplicación, por eso Singleton; es la misma instancia (Default) que usa
+// quien construye uno de esos servicios sin inyectarla. No se registran los estados sueltos porque nadie los pide directamente.
+builder.Services.AddSingleton<IVehicleStateResolver>(VehicleStateResolver.Default);
 builder.Services.AddScoped<IVehicleColleague, VehicleColleague>();
 builder.Services.AddScoped<IFleetLifecycleMediator, FleetLifecycleMediator>();
 builder.Services.AddScoped<IRouteColleague, RouteColleague>();
@@ -234,6 +244,14 @@ builder.Services.AddScoped<IFleetReportService, FleetReportService>();
 //     vehículos, rutas, mantenimiento y alertas sin reemplazarlos. ---
 builder.Services.AddScoped<IFleetDashboardFacade, FleetDashboardFacade>();
 
+// --- VISITOR (patrón de comportamiento): el análisis de la flota (utilización de vehículos, recorridos y distancias, historial
+//     de mantenimiento y hallazgos operativos) lo ejecutan visitantes sobre elementos adaptadores de vehículos, rutas y
+//     mantenimientos (ver Application/Analysis). Es independiente del Decorator de reportes: no usa su generador ni sus
+//     secciones. FleetAnalysisService es Scoped como el resto de casos de uso (lee los repositorios, que son Singleton, y no
+//     guarda estado). Los visitantes NO se registran: acumulan estado mientras recorren, así que el servicio crea los suyos en
+//     cada petición; un visitante Singleton mezclaría los resultados de peticiones distintas. ---
+builder.Services.AddScoped<IFleetAnalysisService, FleetAnalysisService>();
+
 // --- FLYWEIGHT (patrón estructural): un único perfil inmutable por tipo de vehículo (velocidad máxima, restricciones de
 //     navegación y plantillas de mantenimiento), compartido por todos los que lo consultan: el simulador, el servicio de
 //     progreso y la consulta de tipos. La fábrica es Singleton porque ES la tabla de instancias compartidas; con otro
@@ -259,6 +277,26 @@ builder.Services.AddSingleton<ITripProgressTracker, InMemoryTripProgressTracker>
 builder.Services.AddScoped<IVehicleMovementSimulator, VehicleMovementSimulator>();
 builder.Services.AddScoped<ITripProgressService, TripProgressService>();
 builder.Services.AddHostedService<VehicleSimulationBackgroundService>();
+
+// OBSERVER (patrón de comportamiento): el simulador PUBLICA eventos de telemetría (movimiento, parada alcanzada, llegada) y los
+// observadores registrados los reciben sin que el simulador los conozca (ver Application/Monitoring). No sustituye al Bridge (los
+// canales de notificación siguen siendo suyos) ni al Mediator (la coordinación de vehículos y rutas sigue siendo suya).
+//  - VehicleTelemetryPublisher es Singleton: guarda el registro de observadores y la cola de entrega, que deben ser únicos y
+//    sobrevivir a cada paso de la simulación (el simulador es Scoped y se crea de nuevo en cada paso). Se expone por sus dos
+//    interfaces (publicar para el simulador, suscribir para quien registra) resolviendo LA MISMA instancia: no hay duplicados.
+//  - Los observadores son Singleton y solo dependen de servicios Singleton (IFleetAuditLogger): no hay dependencias capturadas
+//    con un ciclo de vida más corto. El publicador recibe TODOS los ITelemetryObserver registrados y los suscribe al construirse:
+//    agregar un observador es registrarlo aquí, sin tocar al publicador ni al simulador (Open/Closed), y como viven lo mismo que
+//    el publicador, no queda ninguna suscripción sin liberar. Los observadores no dependen del publicador (no hay ciclo).
+//  - LiveTelemetryBoard es a la vez observador y modelo de lectura (ILiveTelemetryBoard, el que consulta la API): se registra
+//    UNA vez y se expone por sus dos interfaces.
+builder.Services.AddSingleton<VehicleTelemetryPublisher>();
+builder.Services.AddSingleton<ITelemetryPublisher>(provider => provider.GetRequiredService<VehicleTelemetryPublisher>());
+builder.Services.AddSingleton<ITelemetrySubject>(provider => provider.GetRequiredService<VehicleTelemetryPublisher>());
+builder.Services.AddSingleton<ITelemetryObserver, TripAuditObserver>();
+builder.Services.AddSingleton<LiveTelemetryBoard>();
+builder.Services.AddSingleton<ITelemetryObserver>(provider => provider.GetRequiredService<LiveTelemetryBoard>());
+builder.Services.AddSingleton<ILiveTelemetryBoard>(provider => provider.GetRequiredService<LiveTelemetryBoard>());
 
 var app = builder.Build();
 

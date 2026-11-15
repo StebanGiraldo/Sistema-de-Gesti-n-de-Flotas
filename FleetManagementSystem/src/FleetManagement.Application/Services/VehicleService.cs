@@ -7,6 +7,7 @@ using FleetManagement.Application.Notifications;
 using FleetManagement.Application.Notifications.Decorators;
 using FleetManagement.Domain.Entities;
 using FleetManagement.Domain.Enums;
+using FleetManagement.Domain.States;
 
 namespace FleetManagement.Application.Services;
 
@@ -19,6 +20,9 @@ namespace FleetManagement.Application.Services;
 /// PATRÓN BRIDGE: al cambiar el estado de un vehículo, arma una
 /// <see cref="VehicleNotification"/> (Abstracción refinada) y la envía a
 /// través de <see cref="INotificationChannel"/> (Implementor).
+///
+/// PATRÓN STATE: el cambio manual de estado ya no asigna el valor sin más; lo valida el estado actual del vehículo
+/// (<see cref="VehicleStateContext.ChangeTo"/>), que rechaza las transiciones no permitidas antes de guardar, auditar o notificar.
 /// </summary>
 public class VehicleService : IVehicleService
 {
@@ -30,6 +34,7 @@ public class VehicleService : IVehicleService
     private readonly FleetOnboardingFactoryProvider _onboardingFactoryProvider;  // Abstract Factory
     private readonly IFleetAuditLogger _auditLogger;                             // Singleton (vía interfaz)
     private readonly INotificationChannel _notificationChannel;                  // Bridge (Implementor)
+    private readonly IVehicleStateResolver _vehicleStates;                       // State
 
     public VehicleService(
         IVehicleRepository vehicleRepository,
@@ -37,7 +42,8 @@ public class VehicleService : IVehicleService
         VehicleFactoryProvider vehicleFactoryProvider,
         FleetOnboardingFactoryProvider onboardingFactoryProvider,
         IFleetAuditLogger auditLogger,
-        INotificationChannel notificationChannel)
+        INotificationChannel notificationChannel,
+        IVehicleStateResolver? vehicleStates = null)
     {
         _vehicleRepository = vehicleRepository;
         _driverRepository = driverRepository;
@@ -45,6 +51,7 @@ public class VehicleService : IVehicleService
         _onboardingFactoryProvider = onboardingFactoryProvider;
         _auditLogger = auditLogger;
         _notificationChannel = notificationChannel;
+        _vehicleStates = vehicleStates ?? VehicleStateResolver.Default;
     }
 
     public async Task<IReadOnlyList<VehicleDto>> GetAllVehiclesAsync()
@@ -122,8 +129,10 @@ public class VehicleService : IVehicleService
         if (!Enum.TryParse<VehicleStatus>(request.Status, true, out var newStatus))
             throw new ArgumentException($"Estado de vehículo inválido: '{request.Status}'.");
 
+        // PATRÓN STATE: el estado actual decide si puede pasar al nuevo. Si no puede, lanza InvalidVehicleTransitionException
+        // antes de tocar al vehículo: no se guarda, no se audita y no se notifica nada.
         var previousStatus = vehicle.Status;
-        vehicle.Status = newStatus;
+        new VehicleStateContext(vehicle, _vehicleStates).ChangeTo(newStatus);
         await _vehicleRepository.UpdateAsync(vehicle);
 
         _auditLogger.LogEvent("Vehículo", $"Vehículo {vehicle.LicensePlate} cambió de estado: {previousStatus} -> {newStatus}.");

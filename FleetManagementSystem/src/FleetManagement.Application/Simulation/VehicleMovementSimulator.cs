@@ -2,6 +2,7 @@ using FleetManagement.Application.Flyweights;
 using FleetManagement.Application.Geo;
 using FleetManagement.Application.Interfaces.Repositories;
 using FleetManagement.Application.Interfaces.Services;
+using FleetManagement.Application.Monitoring;
 using FleetManagement.Domain.Entities;
 using FleetManagement.Domain.Enums;
 
@@ -18,6 +19,10 @@ namespace FleetManagement.Application.Simulation;
 /// Cada paso solo recuerda un dato por viaje —los kilómetros recorridos, en <see cref="ITripProgressTracker"/>— y todo lo
 /// demás (posición, siguiente parada) se calcula con <see cref="RoutePath"/>. Si el primer paso de una ruta encuentra al
 /// vehículo lejos del origen, se le coloca en el origen y avanza desde ahí.
+///
+/// PATRÓN OBSERVER: es quien PUBLICA la telemetría. Al terminar el paso de cada viaje avisa, a través de
+/// <see cref="ITelemetryPublisher"/>, de que el vehículo se movió, de las paradas que cruzó y de su llegada; no sabe quién
+/// escucha (auditoría, tablero en vivo...). Si no se le da publicador se comporta exactamente como antes.
 /// </summary>
 public sealed class VehicleMovementSimulator : IVehicleMovementSimulator
 {
@@ -27,6 +32,8 @@ public sealed class VehicleMovementSimulator : IVehicleMovementSimulator
     private readonly ITripProgressTracker _tracker;
     private readonly IVehicleTypeProfileFactory _profiles;
     private readonly SimulationOptions _options;
+    private readonly ITelemetryPublisher? _telemetry;   // Observer (Subject)
+    private readonly TimeProvider _clock;
 
     public VehicleMovementSimulator(
         IDeliveryRouteRepository routeRepository,
@@ -34,7 +41,9 @@ public sealed class VehicleMovementSimulator : IVehicleMovementSimulator
         IDeliveryRouteService routeService,
         ITripProgressTracker tracker,
         IVehicleTypeProfileFactory profiles,
-        SimulationOptions options)
+        SimulationOptions options,
+        ITelemetryPublisher? telemetry = null,
+        TimeProvider? clock = null)
     {
         _routeRepository = routeRepository;
         _vehicleRepository = vehicleRepository;
@@ -42,6 +51,8 @@ public sealed class VehicleMovementSimulator : IVehicleMovementSimulator
         _tracker = tracker;
         _profiles = profiles;
         _options = options;
+        _telemetry = telemetry;
+        _clock = clock ?? TimeProvider.System;
     }
 
     public async Task AdvanceAsync(TimeSpan elapsed, CancellationToken cancellationToken = default)
@@ -77,6 +88,18 @@ public sealed class VehicleMovementSimulator : IVehicleMovementSimulator
             await CompleteTripAsync(trip.Route.Id);
         else
             _tracker.SetCoveredKm(trip.Route.Id, currentKm);
+
+        // Se publica al final: solo se informa un paso que se completó (si la ruta no pudo completarse no hay llegada que avisar).
+        PublishTelemetry(trip, path, speedKmh, previousKm, currentKm);
+    }
+
+    private void PublishTelemetry(ActiveTrip trip, RoutePath path, double speedKmh, double previousKm, double currentKm)
+    {
+        if (_telemetry is null)
+            return;
+
+        foreach (var telemetry in TripTelemetryEvents.ForStep(trip, path, speedKmh, previousKm, currentKm, _clock.GetUtcNow()))
+            _telemetry.Publish(telemetry);
     }
 
     private async Task MoveVehicleAsync(Vehicle vehicle, GeoCoordinate position, double distanceKm)
