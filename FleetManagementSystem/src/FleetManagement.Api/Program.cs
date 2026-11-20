@@ -9,10 +9,12 @@ using FleetManagement.Application.Flyweights;
 using FleetManagement.Application.Interfaces;
 using FleetManagement.Application.Interfaces.Repositories;
 using FleetManagement.Application.Interfaces.Services;
+using FleetManagement.Application.Interpreter;
 using FleetManagement.Application.Mediators;
 using FleetManagement.Application.Monitoring;
 using FleetManagement.Application.Optimization;
 using FleetManagement.Application.Reports;
+using FleetManagement.Application.RouteSheets;
 using FleetManagement.Application.Services;
 using FleetManagement.Application.Simulation;
 using FleetManagement.Domain.States;
@@ -297,6 +299,34 @@ builder.Services.AddSingleton<ITelemetryObserver, TripAuditObserver>();
 builder.Services.AddSingleton<LiveTelemetryBoard>();
 builder.Services.AddSingleton<ITelemetryObserver>(provider => provider.GetRequiredService<LiveTelemetryBoard>());
 builder.Services.AddSingleton<ILiveTelemetryBoard>(provider => provider.GetRequiredService<LiveTelemetryBoard>());
+
+// INTERPRETER (patrón de comportamiento): las reglas escritas como texto (alertas de mantenimiento predictivo y filtros de
+// monitoreo) se convierten en un árbol de expresiones y se interpretan sobre los vehículos (ver Application/Interpreter). Es de
+// SOLO LECTURA y no reemplaza al módulo predictivo (MaintenanceService) ni al análisis de la flota (Visitor): los complementa.
+//  - El parser no guarda estado entre reglas (Singleton) y recibe los límites de longitud y anidamiento.
+//  - Cada caso de uso es un "alcance" (qué variables se pueden nombrar y sobre qué vehículos se evalúa): el de mantenimiento
+//    usa el reloj (TimeProvider) y los dos repositorios; el de monitoreo, solo el de vehículos. Son Scoped como los servicios.
+//  - El servicio recibe los dos alcances por la interfaz IRuleScope; como son del mismo tipo, se cablean aquí a mano (igual que el
+//    Decorator de las reglas de asignación).
+builder.Services.AddSingleton(RuleLimits.Default);
+builder.Services.AddSingleton<IRuleParser, RuleParser>();
+builder.Services.AddScoped<MaintenanceRuleScope>();
+builder.Services.AddScoped<MonitoringRuleScope>();
+builder.Services.AddScoped<IRuleEvaluationService>(provider => new RuleEvaluationService(
+    provider.GetRequiredService<IRuleParser>(),
+    provider.GetRequiredService<MaintenanceRuleScope>(),
+    provider.GetRequiredService<MonitoringRuleScope>()));
+
+// TEMPLATE METHOD (patrón de comportamiento) de la hoja de ruta (ver Application/RouteSheets). Es independiente del Template Method
+// que ya vivía dentro del Command (Application/Commands/RouteCreationCommand), que no se tocó. Cada audiencia es una plantilla:
+// agregar una variante es una clase nueva y UNA línea AddScoped<RouteSheetTemplate, ...> aquí; el proveedor recibe todas las
+// registradas y entrega la de la audiencia pedida. Todo es Scoped porque las plantillas usan servicios Scoped (navegación y avance
+// de los viajes); RouteSheetCollaborators agrupa esos tres colaboradores en un solo parámetro del constructor.
+builder.Services.AddScoped<IRouteSheetSourceLoader, RouteSheetSourceLoader>();
+builder.Services.AddScoped<RouteSheetCollaborators>();
+builder.Services.AddScoped<RouteSheetTemplate, DriverRouteSheet>();
+builder.Services.AddScoped<RouteSheetTemplate, DispatcherRouteSheet>();
+builder.Services.AddScoped<IRouteSheetProvider, RouteSheetProvider>();
 
 var app = builder.Build();
 

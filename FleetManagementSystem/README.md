@@ -45,6 +45,8 @@ Operador), un dashboard administrativo y un portal para conductores.
    - [8.18 Observer — publicar la telemetría del recorrido sin que el simulador sepa quién escucha](#818-observer--publicar-la-telemetría-del-recorrido-sin-que-el-simulador-sepa-quién-escucha)
    - [8.19 State — qué puede hacer un vehículo según su estado](#819-state--qué-puede-hacer-un-vehículo-según-su-estado)
    - [8.20 Visitor — analizar la flota sin cargar las entidades con análisis](#820-visitor--analizar-la-flota-sin-cargar-las-entidades-con-análisis)
+   - [8.21 Template Method — la hoja de ruta: un esqueleto, contenido distinto por audiencia](#821-template-method--la-hoja-de-ruta-un-esqueleto-contenido-distinto-por-audiencia)
+   - [8.22 Interpreter — reglas de mantenimiento y filtros de monitoreo escritos como texto](#822-interpreter--reglas-de-mantenimiento-y-filtros-de-monitoreo-escritos-como-texto)
 9. [Documentación de la API REST](#9-documentación-de-la-api-rest)
 10. [Notas sobre paso a producción](#10-notas-sobre-paso-a-producción)
 11. [Limitaciones conocidas del prototipo](#11-limitaciones-conocidas-del-prototipo)
@@ -320,8 +322,10 @@ Los patrones están implementados, **conectados a un caso de uso real** (no como
 ejemplo aislado) y expuestos a través de la API —y, cuando corresponde, de la interfaz
 gráfica— para que se puedan ejercitar de punta a punta. Las secciones 8.1 a 8.5 son los cinco
 creacionales; de la 8.7 a la 8.17 los estructurales y los patrones de comportamiento anteriores; y
-las **8.18, 8.19 y 8.20** incorporan **Observer, State y Visitor** sin reemplazar ninguno de los
-anteriores.
+las **8.18, 8.19 y 8.20** incorporan **Observer, State y Visitor** y las **8.21 y 8.22**
+**Template Method (hoja de ruta) e Interpreter (reglas como texto)**, sin reemplazar ninguno de los
+anteriores. El Template Method de la 8.21 es **distinto** del que ya existía dentro de
+`Application/Commands/RouteCreationCommand.cs`, que no se tocó.
 
 ### 8.1 Singleton — `FleetAuditLogger`
 
@@ -611,8 +615,10 @@ pasan de "volver a diligenciar todos los campos" a "clonar y ajustar dos datos".
 | Mediator (`IFleetLifecycleMediator` + `IRouteColleague` / `IVehicleColleague`) | `PATCH /api/routes/{id}/status` (el vehículo asignado queda En ruta o Disponible según el estado) y `POST /api/alerts` con retraso (la ruta queda Retrasada) | Cambio de estado de la ruta y «🚨 Reportar complicación» |
 | Memento (`IRouteMemento` / `RouteSnapshot` + `IRouteSnapshotService`) | `POST /api/commands/routes/{id}/optimization` guarda el recuerdo; `POST /api/commands/undo` y `POST /api/commands/redo` lo usan | «Aplicar este orden», «↶ Deshacer» y «↷ Rehacer» |
 | Observer (`ITelemetryPublisher` / `ITelemetryObserver` + `VehicleTelemetryPublisher`) | `GET /api/monitoring/telemetry` y `GET /api/monitoring/telemetry/{vehicleId}` (lo último que publicó el simulador de cada vehículo); las paradas alcanzadas quedan en `GET /api/audit/logs` (categoría «Telemetría») | — |
-| State (`IVehicleState` + `VehicleStateContext` + los cuatro estados) | `PATCH /api/fleet/vehicles/{id}/status` (responde 400 si el estado actual no permite el cambio), `POST /api/maintenance` (un vehículo en Mantenimiento sale del taller), `PATCH /api/routes/{id}/status` y `POST /api/routes` (el estado decide qué hace el vehículo al empezar o terminar el viaje y si puede usarse) | Cambio de estado del vehículo y de la ruta |
+| State (`IVehicleState` + `VehicleStateContext` + los cuatro estados) | `PATCH /api/fleet/vehicles/{id}/status` (responde 400 si el estado actual no permite el cambio), `POST /api/maintenance` (un vehículo en Mantenimiento sale del taller: es la única forma de dejarlo Disponible), `PATCH /api/routes/{id}/status` y `POST /api/routes` (el estado decide qué hace el vehículo al empezar o terminar el viaje y si puede usarse) | Cambio de estado del vehículo y de la ruta |
 | Visitor (`IFleetVisitor` / `IFleetElement` + `FleetElementStructure`) | `GET /api/analysis/fleet` (utilización, recorridos y distancias, historial de mantenimiento y hallazgos operativos) | — |
+| Template Method (`RouteSheetTemplate` + `DriverRouteSheet` / `DispatcherRouteSheet`, elegidas por `IRouteSheetProvider`) | `GET /api/route-sheets/{routeId}?audience=Driver` o `Dispatcher` (mismo esqueleto, contenido distinto; audiencia desconocida → 400 con los valores válidos). Es independiente del Template Method de `RouteCreationCommand` | «📄 Hoja de ruta» en cada ruta de «Rutas y cargas» (panel, con selector Conductor / Despachador) y en la barra de acciones del portal del operador |
+| Interpreter (`IExpression<TResult>` + `IRuleContext`, con `RuleParser`) | `POST /api/rules/maintenance/evaluate` y `POST /api/rules/vehicles/filter` con `{ "rule": "..." }` (solo lectura, rol Admin; regla inválida → 400 con la posición del error) | — |
 
 ### 8.7 Patrones estructurales: Adapter, Bridge, Composite y Decorator
 
@@ -2214,6 +2220,7 @@ classDiagram
     class VehicleState {
         <<abstract>>
         #ManualTargets
+        #RejectionHint(target)
     }
     class AvailableState
     class EnRouteState
@@ -2264,7 +2271,7 @@ stateDiagram-v2
     EnRoute --> Available : termina el viaje o se libera a mano
     Available --> Maintenance : a mano
     EnRoute --> Maintenance : a mano
-    Maintenance --> Available : registrar mantenimiento o a mano
+    Maintenance --> Available : solo al registrar el mantenimiento
     Available --> OutOfService : a mano
     EnRoute --> OutOfService : a mano
     Maintenance --> OutOfService : a mano
@@ -2309,11 +2316,11 @@ sequenceDiagram
 | **Abstract State** | `VehicleState` | Lo común: la regla de transición manual (`ChangeTo`: pedir el mismo estado no hace nada; un destino que el estado no permite lanza la excepción), `StartTrip` y los comportamientos por defecto. Cada estado concreto declara solo lo suyo. |
 | **Concrete State** | `AvailableState` | Libre: puede operar, aún no sigue un viaje; puede ir a En ruta, Mantenimiento o Fuera de servicio. |
 | **Concrete State** | `EnRouteState` | En recorrido: opera y **es el único que sigue un viaje**; al terminar uno queda Disponible salvo que siga en otro viaje activo; puede ir a Disponible, Mantenimiento o Fuera de servicio. |
-| **Concrete State** | `MaintenanceState` | En el taller: no opera (con su motivo); conserva el estado al terminar un viaje; **al registrarse un mantenimiento queda Disponible**; solo puede pasar a mano a Disponible o Fuera de servicio. |
+| **Concrete State** | `MaintenanceState` | En el taller: no opera (con su motivo); conserva el estado al terminar un viaje; **al registrarse un mantenimiento queda Disponible, y esa es la única forma de llegar a Disponible desde aquí**; a mano solo puede pasar a Fuera de servicio (pedir Disponible se rechaza y el mensaje indica que hay que registrar el mantenimiento). |
 | **Concrete State** | `OutOfServiceState` | Fuera de servicio: no opera (con su motivo); conserva el estado al terminar un viaje; solo puede pasar a mano a Disponible o Mantenimiento. |
 | **Resolutor** | `IVehicleStateResolver` / `VehicleStateResolver` | Entrega el estado de cada valor de `VehicleStatus` (una instancia por estado, compartida). Los servicios dependen de la interfaz (DIP) y no construyen estados. Rechaza un valor que no es un estado. |
 | **Almacén del estado** | `Vehicle.Status` | La **única** copia del estado (lo que ya persisten los repositorios, los DTO y la API). El contexto deriva el estado vigente de ahí en cada consulta, así que no hay una segunda copia que pueda desincronizarse. |
-| **Error de dominio** | `InvalidVehicleTransitionException` | Hereda de `InvalidOperationException`, como `AssignmentRuleException`: una regla de negocio incumplida. Dice de qué estado a cuál y a cuáles sí se puede pasar. |
+| **Error de dominio** | `InvalidVehicleTransitionException` | Hereda de `InvalidOperationException`, como `AssignmentRuleException`: una regla de negocio incumplida. Dice de qué estado a cuál y a cuáles sí se puede pasar, y —cuando el estado de origen tiene otro camino— una indicación (`Hint`). |
 | **Clientes** | `VehicleColleague`, `VehicleService`, `MaintenanceService`, `RouteAssignmentValidator`, `ActiveTrips`, y los visitantes de 8.20 | Consultan o accionan el estado; ninguno compara `VehicleStatus` para decidir su comportamiento. |
 
 #### 6. Funcionamiento dentro del sistema
@@ -2324,7 +2331,7 @@ sequenceDiagram
 |--------|:------:|:----------------:|---------------------|----------------------------|------------------------------|-----------------------------|---------------------------|
 | **Available** | sí | no | — | queda En ruta | no cambia | no cambia | EnRoute, Maintenance, OutOfService |
 | **EnRoute** | sí | **sí** | — | sigue En ruta | queda Available **si no sigue en otro viaje activo** | no cambia | Available, Maintenance, OutOfService |
-| **Maintenance** | no | no | «El vehículo {placa} está en mantenimiento; no se puede usar en una ruta.» | queda En ruta (regla conservada del Mediator) | no cambia | **queda Available** | Available, OutOfService |
+| **Maintenance** | no | no | «El vehículo {placa} está en mantenimiento; no se puede usar en una ruta.» | queda En ruta (regla conservada del Mediator) | no cambia | **queda Available** | OutOfService (Available **solo** registrando el mantenimiento) |
 | **OutOfService** | no | no | «El vehículo {placa} está fuera de servicio; no se puede usar en una ruta.» | queda En ruta (regla conservada del Mediator) | no cambia | no cambia | Available, Maintenance |
 
 Pedir a mano el estado en el que ya está no cambia nada (es inofensivo, como siempre) y sigue guardándose, auditándose y notificándose
@@ -2337,12 +2344,20 @@ mantenimiento siguen las reglas que ya tenían:
 |---------------|:---------:|:-------:|:-----------:|:------------:|
 | **Available** | = | ✔ | ✔ | ✔ |
 | **EnRoute** | ✔ | = | ✔ | ✔ |
-| **Maintenance** | ✔ | **✘** | = | ✔ |
+| **Maintenance** | **✘** | **✘** | = | ✔ |
 | **OutOfService** | ✔ | **✘** | ✔ | = |
 
 (= : se pide el mismo estado, no pasa nada). Lo que se rechaza es sacar de golpe a la carretera a un vehículo que está en el taller
 o fuera de servicio: antes debe quedar **Disponible**, un paso consciente. Es coherente con las reglas de asignación, que ya impedían
 usar ese vehículo en una ruta. Además se rechaza un valor que no corresponde a ninguno de los cuatro estados (por ejemplo, `"99"`).
+
+**Del taller solo se sale registrando el mantenimiento.** Un vehículo en Mantenimiento **no puede pasarse a Disponible a mano**
+(`PATCH /api/fleet/vehicles/{id}/status` responde 400): la única forma de dejarlo Disponible es registrar su mantenimiento
+(`POST /api/maintenance`), que llama a `CompleteMaintenance` del estado. La regla vive en un solo lugar —`MaintenanceState` ya no
+incluye Available entre sus destinos manuales—, sin condicionales nuevos en los servicios. El rechazo añade una indicación
+(`InvalidVehicleTransitionException.Hint`, que cada estado puede aportar con `RejectionHint`): «Para dejarlo Disponible, registre el
+mantenimiento del vehículo.». Desde Mantenimiento sigue siendo posible pasar a mano a Fuera de servicio, y desde Fuera de servicio
+a Disponible (esa transición ya existía y no se tocó).
 
 **Tres orígenes de eventos, a propósito separados** (así ya funcionaba el sistema, y por eso no se unificaron):
 
@@ -2437,7 +2452,7 @@ internal void TransitionTo(VehicleStatus target)
 | `Api/Controllers/FleetController.cs` | Un `catch (InvalidVehicleTransitionException)` que responde 400 con el motivo, igual que los demás errores de regla. | Sin él, una transición rechazada sería un 500. |
 | `Api/Program.cs` | Un registro: `AddSingleton<IVehicleStateResolver>(VehicleStateResolver.Default)`. | Raíz de composición. |
 
-Las **pruebas existentes no se modificaron**: los constructores de `VehicleColleague`, `VehicleService`, `MaintenanceService` y
+Las pruebas existentes no se modificaron **al introducir el patrón**; solo se ajustaron después, al adoptar la regla «del taller solo se sale registrando el mantenimiento» (las que daban por válido el cambio manual Mantenimiento → Disponible). Los constructores de `VehicleColleague`, `VehicleService`, `MaintenanceService` y
 `RouteAssignmentValidator` solo ganaron un parámetro opcional al final, así que las pruebas que los construyen siguen compilando
 (una prueba de diseño lo fija).
 
@@ -2498,11 +2513,17 @@ Carpeta `tests/FleetManagement.Application.Tests/State/` — **192 pruebas**, si
 | `VehicleStateBehaviorTests.cs` | 58 | Cada estado concreto: qué permite (`CanOperate`, `CanTrackTrip`), su motivo de bloqueo con los mensajes originales, cómo reacciona a iniciar y terminar un viaje, **la matriz completa de transiciones manuales (16 casos, incluidas las no permitidas)**, que el rechazo explica el motivo y a dónde sí se puede ir, que un valor indefinido se rechaza, que los estados son inmutables y compartidos, y que el contexto no guarda una segunda copia del estado. |
 | `VehicleServiceStateTransitionTests.cs` | 32 | **Transiciones no permitidas a través del servicio real**: un cambio permitido se guarda, se audita y se notifica; uno rechazado **no se guarda, no se audita y no se notifica**; el texto del estado sigue sin distinguir mayúsculas; vehículo inexistente y texto inválido responden como antes; la prioridad de la notificación sigue saliendo del nuevo estado. |
 | `VehicleStateMediatorCompatibilityTests.cs` | 30 | **Compatibilidad con el Mediator**: el estado guardado del vehículo sigue las reglas de siempre desde cada estado inicial; un vehículo que sigue en otro viaje activo no se libera; una ruta sin vehículo o con vehículo inexistente no coordina nada; un retraso por alerta no toca al vehículo; el participante de vehículos le pregunta al estado y un estado alternativo cambia el resultado sin tocar al Mediator. |
-| `VehicleStateMaintenanceRegistrationTests.cs` | 26 | Qué le hace a cada estado el registro de un mantenimiento (solo el taller sale de él; En ruta y Fuera de servicio no cambian); que el servicio sigue guardando el registro, la fecha, la auditoría y el aviso; que quien decide es el estado (con un estado alternativo). |
+| `VehicleStateMaintenanceRegistrationTests.cs` | 26 | Qué le hace a cada estado el registro de un mantenimiento (solo el taller sale de él, y solo así llega a Disponible; En ruta y Fuera de servicio no cambian); que el servicio sigue guardando el registro, la fecha, la auditoría y el aviso; que quien decide es el estado (con un estado alternativo). |
 | `VehicleStateTripTrackingTests.cs` | 16 | Un viaje solo lo sigue la simulación mientras la ruta está activa **y** el vehículo está En ruta; mandar el vehículo al taller detiene su viaje y devolverlo a En ruta lo vuelve a mover; la simulación y la consulta de avance coinciden en qué viajes existen. |
 | `VehicleStateAssignmentTests.cs` | 15 | Las reglas de asignación aceptan o rechazan según lo que el estado permite, con los mismos mensajes; el motivo del estado sale junto con las demás infracciones; un estado alternativo cambia el resultado sin tocar al validador. |
 | `VehicleStateDesignTests.cs` | 11 | Pruebas de arquitectura: exactamente cuatro estados; el espacio `States` solo conoce el dominio; los componentes consultan al resolutor y nunca a un estado concreto; los constructores existentes se conservan con el parámetro nuevo opcional; la entidad `Vehicle` sigue con su enumerado y no conoce los estados. |
-| `VehicleStateLifecycleScenarioTests.cs` | 4 | Escenarios completos: un vehículo que va al taller a mitad de un viaje se queda allí cuando el viaje termina y vuelve por Disponible; un viaje normal libera al vehículo por el estado; una ruta planificada no toca al vehículo; solo un cambio aceptado envía aviso. |
+| `VehicleStateLifecycleScenarioTests.cs` | 4 | Escenarios completos: un vehículo que va al taller a mitad de un viaje se queda allí cuando el viaje termina y solo sale al registrarse su mantenimiento (a mano no pasa a Disponible); un viaje normal libera al vehículo por el estado; una ruta planificada no toca al vehículo; solo un cambio aceptado envía aviso. |
+
+> Los totales de la tabla corresponden a la última medición con `dotnet test`. Después se agregaron pruebas de la regla «del taller solo se
+> sale registrando el mantenimiento» y se ajustaron las que daban por válido el cambio manual Mantenimiento → Disponible
+> (`VehicleStateBehaviorTests`, `VehicleServiceStateTransitionTests`, `VehicleStateMaintenanceRegistrationTests`,
+> `VehicleStateTripTrackingTests`, `VehicleStateLifecycleScenarioTests`); los totales por archivo cambiaron y se actualizan al volver a
+> ejecutar la suite.
 
 **Comandos exactos** (desde la raíz de la solución, `FleetManagementSystem/`):
 
@@ -2530,7 +2551,7 @@ Mantenimiento y `VAN-005` Fuera de servicio:
 $ curl -s -X PATCH http://localhost:5080/api/fleet/vehicles/{id de CAR-003}/status -H "Authorization: Bearer $TOKEN" \
        -H 'Content-Type: application/json' -d '{"status": "EnRoute"}'
 HTTP 400
-{ "message": "Transición de estado no permitida: el vehículo CAR-003 está en Maintenance y no puede pasar a EnRoute. Desde Maintenance solo puede pasar a: Available, OutOfService." }
+{ "message": "Transición de estado no permitida: el vehículo CAR-003 está en Maintenance y no puede pasar a EnRoute. Desde Maintenance solo puede pasar a: OutOfService. Para dejarlo Disponible, registre el mantenimiento del vehículo." }
 
 Auditoría de categoría «Vehículo» antes: 0 · después: 0  → el cambio rechazado no dejó rastro
 Estado de CAR-003 después del rechazo: Maintenance
@@ -2540,15 +2561,15 @@ HTTP 400
 { "message": "Transición de estado no permitida: el vehículo VAN-005 está en OutOfService y no puede pasar a EnRoute. Desde OutOfService solo puede pasar a: Available, Maintenance." }
 ```
 
-El camino permitido (Mantenimiento → Disponible → En ruta) responde `204` las dos veces, y la auditoría de la categoría «Vehículo» deja
-**solo** los dos cambios aceptados:
-
-```json
-[
-  { "category": "Vehículo", "message": "Vehículo CAR-003 cambió de estado: Maintenance -> Available." },
-  { "category": "Vehículo", "message": "Vehículo CAR-003 cambió de estado: Available -> EnRoute." }
-]
-```
+> **Actualización posterior a estas mediciones — regla «del taller solo se sale registrando el mantenimiento».** Las salidas de esta
+> sección se registraron **antes** de adoptar esa regla y no se volvieron a ejecutar. Lo que cambia respecto de lo mostrado:
+> el mensaje de rechazo de `CAR-003` termina ahora con «Para dejarlo Disponible, registre el mantenimiento del vehículo.», y
+> `PATCH … {"status": "Available"}` sobre un vehículo en Mantenimiento responde 400 (antes `204`). El camino permitido para volver a
+> la carretera es: `POST /api/maintenance` (deja al vehículo Disponible y queda auditado en la categoría «Mantenimiento») y luego
+> `PATCH … {"status": "EnRoute"}` (`204`). La auditoría de la categoría «Vehículo» deja **solo** ese último cambio aceptado
+> (`Vehículo CAR-003 cambió de estado: Available -> EnRoute.`): los rechazos no dejan rastro y salir del taller no es un cambio manual.
+> Esto lo fijan las pruebas `VehicleStateLifecycleScenarioTests` y `VehicleServiceStateTransitionTests`; los totales de pruebas y la
+> tabla de mutación de abajo corresponden a la medición anterior.
 
 **c) Lo de siempre se conserva y el único cambio de comportamiento, frente a la API original** (mismo `PATCH` a `MOT-004`):
 
@@ -3003,6 +3024,537 @@ resultado en la [sección 12](#12-pruebas-automatizadas-y-cómo-demostrar-el-fac
 
 **Conclusión: 9 de 9 roturas detectadas; ninguna sobrevivió.** Cada rotura se comparó contra la suite completa (1438 pruebas); «detectada» significa que la compilación falló, que al menos una prueba falló o que la ejecución se interrumpió.
 
+### 8.21 Template Method — la hoja de ruta: un esqueleto, contenido distinto por audiencia
+
+Una ruta de reparto la leen personas distintas con necesidades distintas. **El conductor** necesita saber qué recorrer y cómo seguirlo
+(paradas en orden, enlace de navegación, próxima parada y hora estimada). **Quien despacha** necesita saber cómo va la operación
+(cuánta carga lleva frente a lo que el vehículo puede cargar, cuánto se ha retrasado, cuánto lleva recorrido). Los pasos para armar
+la hoja son siempre los mismos —cargar y validar, encabezado, paradas, carga, avance, navegación, ensamblar— y lo único que cambia
+es **qué aporta cada audiencia en cada paso**. Escribir un servicio con un `if (audiencia == ...)` repetiría el esqueleto y
+obligaría a editarlo con cada audiencia nueva. El **Template Method** fija el esqueleto en una clase base y deja que cada variante
+complete solo los pasos que le corresponden.
+
+> **Objetivo que cubre.** Complementa la **operación de las rutas y el seguimiento de los viajes**: reutiliza lo que ya existe
+> (navegación, avance de los viajes, reglas de capacidad de la asignación) y lo presenta por audiencia, **sin modificar** ninguno de
+> los patrones anteriores.
+
+> **No es el Template Method de los comandos.** El proyecto ya tenía un Template Method dentro de `Application/Commands/RouteCreationCommand.cs`
+> (el esqueleto «crear la ruta, guardar el recuerdo, registrar el resultado» de las órdenes de creación). **Ese archivo no se tocó
+> y no se reutiliza**: esta sección es otro patrón, con otra jerarquía, otro espacio de nombres (`Application/RouteSheets`) y otro
+> propósito (presentar datos, no ejecutar una orden con deshacer).
+
+#### 1. Descripción del patrón
+
+Template Method define en una clase base el **esqueleto de un algoritmo** y difiere algunos pasos a las subclases, de modo que estas
+redefinan **pasos** del algoritmo sin cambiar su **estructura**. Aquí el esqueleto es `RouteSheetTemplate.BuildAsync(routeId)`, un
+método público **no virtual**: ninguna variante puede reordenarlo, saltarse un paso ni dejar de llamar a la parte fija. Los pasos que
+varían son miembros `protected`: dos son **abstractos** (toda audiencia debe decidirlos) y tres son **hooks** con un valor por
+defecto válido («no aportar nada»).
+
+```
+cargar y validar (fijo) → encabezado → paradas → carga → avance → navegación → ensamblar la hoja (fijo)
+        │                    abstracto   hook     hook   abstracto   hook
+        └─ si la ruta no existe o no tiene vehículo, falla aquí: ningún paso variable llega a ejecutarse
+```
+
+#### 2. Justificación de su utilización
+
+| Problema real del proyecto | Cómo lo resuelve el Template Method |
+|----------------------------|--------------------------------------|
+| La hoja del conductor y la del despachador comparten el mismo recorrido de armado y difieren en el contenido de cada paso. | El recorrido vive **una sola vez** en la clase base; cada audiencia es una clase pequeña que completa sus pasos. |
+| Validar la ruta (existe, tiene vehículo, su conductor existe) no debe repetirse ni poder olvidarse en una variante nueva. | La carga y la validación son un paso **fijo** de la base: una variante nueva no puede omitirlo. |
+| Hay pasos que a una audiencia no le sirven (el conductor no necesita el resumen de carga; el despachador no necesita las paradas ni el enlace). | Son **hooks** con valor por defecto (sin paradas, sin carga, sin enlace): la variante no implementa un método vacío ni lanza `NotSupportedException`. |
+| Una audiencia nueva (por ejemplo, un cliente) no debe obligar a editar lo que ya funciona. | Es una clase nueva y **una línea** de registro; el proveedor y el controlador no cambian. |
+
+**Qué le toca a cada patrón (no se duplican responsabilidades):**
+
+| Patrón | Responsabilidad que **conserva** | Qué hace el Template Method de la hoja en esa frontera |
+|--------|----------------------------------|--------------------------------------------------------|
+| **Template Method de los comandos** | El esqueleto de la creación de rutas con historial. | Nada: no lo usa, no lo hereda y no lo modifica. |
+| **Adapter y Proxy** ([8.7](#87-patrones-estructurales-adapter-bridge-composite-y-decorator), [8.10](#810-proxy--caché-del-proveedor-de-navegación)) | Generar el enlace de navegación (y cachearlo). | La hoja del conductor **le pide** el enlace a `INavigationService`; no construye URLs. |
+| **Avance de los viajes** (`ITripProgressService`, [8.18](#818-observer--publicar-la-telemetría-del-recorrido-sin-que-el-simulador-sepa-quién-escucha)) | Decidir qué viajes están activos y cuánto llevan. | La base lo consulta **una vez** y entrega a cada variante el viaje de **esta** ruta; no repite la regla de «viaje activo». |
+| **State** ([8.19](#819-state--qué-puede-hacer-un-vehículo-según-su-estado)) | Qué puede hacer un vehículo según su estado. | Nada nuevo: un vehículo que no puede seguir un viaje (por ejemplo, en Mantenimiento) simplemente no tiene viaje activo y la hoja queda sin datos de viaje (porcentaje, próxima parada y ETA). No se cambia ningún estado. |
+| **Strategy y reglas de asignación** ([8.11](#811-strategy--optimizar-paradas-y-repartir-cargas), [8.12](#812-decorator--reglas-de-asignación-sobre-el-servicio-de-rutas)) | Decidir cómo se asigna la carga. | La comparación carga/capacidad de la hoja usa el **mismo criterio** (peso contra `CapacityKg`, volumen solo si el vehículo declara `CapacityM3`, con tolerancia mínima), pero **solo informa**: no valida ni rechaza. |
+
+#### 3. Ubicación de la implementación
+
+Todo es nuevo y vive en `src/FleetManagement.Application/RouteSheets/`:
+
+| Archivo | Qué contiene |
+|---------|--------------|
+| `RouteSheetTemplate.cs` | La **clase abstracta**: `BuildAsync` (no virtual), los dos pasos abstractos, los tres hooks y el registro `RouteSheetCollaborators` (cargador, navegación y avance en un solo parámetro). |
+| `DriverRouteSheet.cs` | Variante del **conductor**. |
+| `DispatcherRouteSheet.cs` | Variante del **despachador**. |
+| `CargoCapacitySummary.cs` | Regla única (interna) de la comparación carga/capacidad. |
+| `RouteSheetSourceLoader.cs` | El paso fijo «cargar y validar»: `IRouteSheetSourceLoader` y su implementación sobre los repositorios. |
+| `RouteSheetModels.cs` | La audiencia (`RouteSheetAudience`), los datos que reciben los pasos (`RouteSheetSource`) y la hoja resultante (`RouteSheetDto` con su encabezado, carga y avance). |
+| `RouteSheetProvider.cs` | `IRouteSheetProvider`: recibe **todas** las plantillas registradas y entrega la de la audiencia pedida. |
+| `src/FleetManagement.Api/Controllers/RouteSheetsController.cs` | `GET api/route-sheets/{routeId}?audience=Driver\|Dispatcher`. |
+| **Modificado:** `src/FleetManagement.Api/Program.cs` | Los registros (sección «Integración»). **Ningún patrón, servicio, entidad ni prueba existente se modificó.** |
+| `frontend/js/routesheet.js` (nuevo) | La presentación, compartida por el panel y el portal del operador: botón, ventana, selector de audiencia y los cinco pasos del esqueleto. Solo dibuja lo que entrega la API. |
+| **Modificados (solo conexión):** `frontend/js/api.js`, `frontend/dashboard.html`, `frontend/operator.html` | Una función `getRouteSheet` y una etiqueta `<script>` en cada página. |
+| Pruebas: `tests/FleetManagement.Application.Tests/RouteSheets/` y `Architecture/RouteSheetAndInterpreterDesignTests.cs` | Ver «Pruebas de funcionamiento». |
+
+#### 4. Diagrama UML
+
+```mermaid
+classDiagram
+    direction LR
+    class RouteSheetTemplate {
+        <<abstract>>
+        +Audience RouteSheetAudience
+        +BuildAsync(routeId) RouteSheetDto
+        #BuildHeader(source) RouteSheetHeader
+        #BuildProgress(source) RouteSheetProgress
+        #BuildStops(source) TripStopDto list
+        #BuildCargo(source) RouteSheetCargo
+        #BuildNavigationAsync(source) string
+    }
+    class DriverRouteSheet {
+        paradas + navegacion + proxima parada
+    }
+    class DispatcherRouteSheet {
+        carga frente a capacidad + retraso
+    }
+    class RouteSheetCollaborators {
+        <<record>>
+        Source
+        Navigation
+        Progress
+    }
+    class IRouteSheetSourceLoader {
+        <<interface>>
+        +LoadAsync(routeId) RouteSheetSource
+    }
+    class INavigationService {
+        <<interface>>
+    }
+    class ITripProgressService {
+        <<interface>>
+    }
+    class IRouteSheetProvider {
+        <<interface>>
+        +For(audience) RouteSheetTemplate
+    }
+    class RouteSheetProvider
+    RouteSheetTemplate <|-- DriverRouteSheet
+    RouteSheetTemplate <|-- DispatcherRouteSheet
+    RouteSheetTemplate --> RouteSheetCollaborators : recibe
+    RouteSheetCollaborators --> IRouteSheetSourceLoader
+    RouteSheetCollaborators --> INavigationService
+    RouteSheetCollaborators --> ITripProgressService
+    IRouteSheetProvider <|.. RouteSheetProvider
+    RouteSheetProvider o-- RouteSheetTemplate : todas las registradas
+```
+
+```mermaid
+flowchart TD
+    A["BuildAsync(routeId) - NO virtual"] --> B["1. Cargar y validar - fijo"]
+    B -->|"ruta inexistente: 404 / sin vehiculo: 400"| X(["se detiene: ningun paso variable corre"])
+    B --> C["2. Encabezado - abstracto"]
+    C --> D["3. Paradas - hook, por defecto ninguna"]
+    D --> E["4. Carga - hook, por defecto ninguna"]
+    E --> F["5. Avance - abstracto"]
+    F --> G["6. Navegacion - hook, por defecto ninguna"]
+    G --> H["Ensamblar RouteSheetDto - fijo"]
+```
+
+#### 5. Interfaces y clases participantes
+
+| Participante | Rol | Detalle |
+|--------------|-----|---------|
+| `RouteSheetTemplate` | **Clase abstracta** (esqueleto) | `BuildAsync` es el único método público y no es virtual. Recibe sus colaboradores por constructor (`RouteSheetCollaborators`), no por herencia. |
+| `BuildHeader`, `BuildProgress` | Pasos **abstractos** | Toda audiencia decide su encabezado y qué dice del avance (aunque sea «nada»). |
+| `BuildStops`, `BuildCargo`, `BuildNavigationAsync` | **Hooks** | Valor por defecto válido: lista vacía o `null`. Una variante los sobrescribe solo si aporta algo. |
+| `DriverRouteSheet` | Variante concreta (`sealed`) | Paradas en orden (origen, intermedias y destino, con las mismas etiquetas que el avance del viaje), enlace de `INavigationService` y, si el viaje está en curso, próxima parada, kilómetros que faltan y ETA. |
+| `DispatcherRouteSheet` | Variante concreta (`sealed`) | Resumen de carga frente a capacidad, retraso de la ruta, porcentaje y kilómetros que faltan (si el viaje está en curso) y nombre del conductor. |
+| `IRouteSheetSourceLoader` | Paso fijo, detrás de una interfaz | Carga ruta, vehículo y conductor; lanza `KeyNotFoundException` o `InvalidOperationException`. |
+| `RouteSheetProvider` | Selección sin `switch` | Indexa las plantillas por su `Audience`; no conoce ninguna clase concreta. |
+
+#### 6. Funcionamiento dentro del sistema
+
+**Qué aporta cada audiencia en cada paso:**
+
+| Paso | Conductor (`Driver`) | Despachador (`Dispatcher`) |
+|------|----------------------|----------------------------|
+| Encabezado | «Hoja de ruta del conductor», ruta, estado, placa y fecha programada | «Hoja de despacho», lo mismo y el **nombre del conductor** (si la ruta lo tiene) |
+| Paradas | Origen, paradas en orden y destino | — (lista vacía) |
+| Carga | — | Artículos, peso total y capacidad, porcentaje de uso, volumen (y su capacidad si el vehículo la declara) y si **excede** la capacidad |
+| Avance | Kilómetros que faltan, próxima parada y ETA (solo si el viaje está en curso) | Porcentaje y kilómetros que faltan (si el viaje está en curso) y **minutos de retraso** de la ruta |
+| Navegación | Enlace de navegación externa | — |
+
+**Errores.** La parte fija decide, antes de cualquier paso variable:
+ruta inexistente → `404` (`Ruta no encontrada.`); ruta sin vehículo → `400` con el nombre de la ruta; vehículo o conductor asignados que ya
+no existen → `404` (un dato inconsistente no se imprime en silencio sin conductor). Una **audiencia** ausente o desconocida → `400` con
+los valores válidos (`Audiencia desconocida: 'Pilot'. Valores válidos: Dispatcher, Driver.`). Los números del enum (`0`, `1`) **no** son audiencias.
+
+**Endpoint** (nuevo, de lectura y sin rol, igual que las demás consultas de rutas):
+
+```
+GET /api/route-sheets/{routeId}?audience=Driver
+GET /api/route-sheets/{routeId}?audience=Dispatcher
+```
+
+Forma de la respuesta (**ilustrativa**: muestra los campos, no es salida de una ejecución). Las partes que una audiencia no aporta
+**no se escriben** (la API omite los nulos) o llegan vacías (`stops: []`):
+
+```json
+{
+  "audience": "Dispatcher",
+  "header": { "title": "Hoja de despacho", "routeName": "...", "status": "InProgress", "licensePlate": "...", "driverName": "..." },
+  "stops": [],
+  "cargo": { "items": 2, "totalWeightKg": 0, "capacityKg": 0, "weightUsagePercent": 0, "totalVolumeM3": 0, "exceedsCapacity": false },
+  "progress": { "percent": 0, "remainingKm": 0, "delayMinutes": 0 }
+}
+```
+
+**Cómo verlo en la interfaz.**
+
+1. **Panel administrativo** → pestaña «Rutas y cargas» → «📄 Hoja de ruta» en la fila de una ruta. La ventana abre con la audiencia **Conductor**; el selector cambia a **Despachador**, y «Probar audiencia inválida» muestra el 400 con los valores válidos.
+2. Se dibujan siempre los **mismos cinco pasos, en el mismo orden**, cada uno con su etiqueta (*abstracto* u *hook*) y el método de la clase base que lo declara. Lo que cambia al cambiar de audiencia es el **contenido**: los pasos que esa audiencia no aporta quedan **atenuados** con la nota «el hook queda en su valor por defecto». Eso es lo que hace visible el patrón.
+3. **Portal del operador** → «📄 Hoja de ruta» en la barra inferior: muestra la hoja del **conductor** de su ruta activa (sin selector: el conductor no elige su audiencia).
+4. Para ver la próxima parada y la hora estimada, la ruta debe estar **En progreso** y su vehículo **En ruta**; si no hay viaje en curso, el paso «Avance» lo dice.
+
+**Solo lectura.** Armar una hoja no cambia el estado de ningún vehículo ni ruta, no escribe en la bitácora y no envía avisos (una prueba lo comprueba).
+
+#### 7. Integración con los demás componentes
+
+**Cambios en archivos existentes:** `Api/Program.cs` (los `using` y estos registros) y, solo para conectar la pantalla, `frontend/js/api.js` (una función) y las dos páginas HTML (una etiqueta `<script>` cada una). La lógica de la interfaz es un archivo nuevo, `frontend/js/routesheet.js`.
+
+```csharp
+builder.Services.AddScoped<IRouteSheetSourceLoader, RouteSheetSourceLoader>();
+builder.Services.AddScoped<RouteSheetCollaborators>();
+builder.Services.AddScoped<RouteSheetTemplate, DriverRouteSheet>();
+builder.Services.AddScoped<RouteSheetTemplate, DispatcherRouteSheet>();
+builder.Services.AddScoped<IRouteSheetProvider, RouteSheetProvider>();
+```
+
+| Pieza | Ciclo de vida | Por qué |
+|-------|---------------|---------|
+| Cargador, colaboradores, plantillas y proveedor | **Scoped** | Las plantillas usan servicios Scoped (navegación y avance de los viajes); un Singleton los capturaría. |
+| `INavigationService`, `ITripProgressService`, repositorios | Los que ya estaban registrados | No se modificaron. |
+
+**Agregar una audiencia** (por ejemplo, `Customer`): un valor en `RouteSheetAudience`, una clase que herede de `RouteSheetTemplate` y una línea
+`AddScoped<RouteSheetTemplate, ...>`. El proveedor, el controlador, el esqueleto y las otras variantes no cambian; el mensaje de «valores válidos»
+ya lo incluye porque sale de las plantillas registradas.
+
+**Qué no cambió.** `RouteCreationCommand` y todo `Application/Commands`, el Adapter y el Proxy de navegación, `TripProgressService`,
+`DeliveryRouteService`, los estados del vehículo y todas las pruebas existentes.
+
+#### 8. Principios SOLID aplicados
+
+| Principio | Cómo se cumple |
+|-----------|----------------|
+| **S** — Responsabilidad única | El esqueleto ordena; el cargador carga y valida; cada variante decide el contenido de **su** audiencia; el proveedor solo elige; la comparación de carga es una clase aparte. |
+| **O** — Abierto/Cerrado | Una audiencia nueva es una clase y una línea de registro (una prueba registra una plantilla ajena y el proveedor la entrega sin cambios). |
+| **L** — Sustitución de Liskov | Cualquier variante puede usarse donde se espera `RouteSheetTemplate`: ninguna lanza `NotSupportedException`, ninguna deja un método vacío ni cambia el orden (no se puede: `BuildAsync` no es virtual). Una prueba paramétrica ejecuta el mismo contrato sobre **todas** las variantes que encuentra por reflexión. |
+| **I** — Segregación de interfaces | Contratos de un solo método: `IRouteSheetSourceLoader.LoadAsync` e `IRouteSheetProvider.For`; la plantilla usa `INavigationService` e `ITripProgressService` tal como existen. |
+| **D** — Inversión de dependencias | La plantilla depende de interfaces (cargador, navegación y avance), inyectadas por composición; `Application` no referencia `Infrastructure` ni `Api`. |
+
+#### 9. Límites y decisiones
+
+- **Cuántos pasos.** El esqueleto tiene siete etapas, pero solo **cinco** son puntos de extensión (dos abstractos y tres hooks); el resto (cargar y ensamblar) es fijo. Se mantuvo por debajo de seis pasos variables.
+- **Hooks con valor por defecto.** «No aportar nada» es legítimo para una audiencia; por eso hay hooks y no métodos abstractos que obligarían a escribir cuerpos vacíos (*Refused Bequest*). Ninguna variante necesita llamar a la base (*Call Super*).
+- **Sin política por conductor.** El proyecto no tiene una regla de «un conductor solo ve sus rutas» que reproducir; por eso la consulta no exige rol, igual que `GET api/routes/{id}` y la navegación. Si esa política se crea, es una decisión de acceso aparte.
+- **Solo datos existentes.** No se inventó ningún campo: todo sale de la ruta, el vehículo, el conductor de la ruta y el avance de los viajes.
+- **Avance una sola vez.** La base consulta todos los viajes activos y filtra el de la ruta: es la única consulta que ofrece `ITripProgressService`; no se agregó otra.
+- **Alcance del diseño.** Las pruebas de arquitectura leen las firmas de los tipos, no el cuerpo de los métodos.
+
+#### 10. Pruebas de funcionamiento
+
+Carpeta `tests/FleetManagement.Application.Tests/RouteSheets/` y `Architecture/RouteSheetAndInterpreterDesignTests.cs`, sin librerías de mocking
+(dobles escritos a mano y, para la integración, los servicios reales de navegación y de avance sobre los repositorios en memoria):
+
+| Archivo | Métodos de prueba* | Qué demuestra |
+|---------|-------------------:|----------------|
+| `RouteSheetTemplateTests.cs` | 11 | El **orden exacto** de los pasos con una variante espía (`load, trips, header, stops, cargo, progress, navigation`); que `BuildAsync` no es virtual y es la única operación pública; que una ruta inexistente o sin vehículo se rechaza **antes** de cualquier paso variable (ni siquiera se consulta el avance); que cada paso recibe el viaje de **esta** ruta; que una variante mínima obtiene los valores por defecto y nunca pide la navegación. |
+| `RouteSheetVariantTests.cs` | 24 | Un **contrato paramétrico** sobre cada variante (descubiertas por reflexión): solo recibe los colaboradores, arma la hoja con su audiencia, funciona sin conductor, sin carga y sin viaje activo, solo sobrescribe miembros protegidos; el contenido de cada audiencia con los servicios reales (paradas `Origen, Primera, Segunda, Destino`, próxima parada y ETA iguales a los del servicio de avance, carga frente a capacidad, retraso, nombre del conductor); los casos límite de la carga (justo la capacidad, error de redondeo, un gramo de más, volumen no declarado, capacidad 0, sin artículos); que armar una hoja no cambia nada ni escribe auditoría ni avisos. |
+| `RouteSheetProviderTests.cs` | 9 | La plantilla correcta por audiencia (sin distinguir mayúsculas ni espacios); audiencia desconocida o ausente con la lista de válidas; los números del enum no valen; los valores válidos salen de lo registrado; una plantilla ajena registrada se entrega sin cambiar el proveedor; dos plantillas para la misma audiencia se rechazan. |
+| `RouteSheetSourceLoaderTests.cs` | 6 | Ruta, vehículo y conductor cargados; sin conductor es válido; ruta, vehículo o conductor inexistentes y ruta sin vehículo, con su mensaje. |
+| `Architecture/RouteSheetAndInterpreterDesignTests.cs` (parte del Template Method) | — | El código existente no conoce `RouteSheets`; solo depende del dominio y de abstracciones; solo `BuildAsync` y `Audience` son públicos; los puntos de extensión son `protected` y no pasan de seis; solo los dos pasos obligatorios son abstractos; las variantes son `sealed` y solo sobrescriben miembros protegidos; no hay estado estático mutable. |
+
+\* Se cuentan **métodos** `[Fact]`/`[Theory]`; una `[Theory]` se ejecuta una vez por cada fila de datos, así que el total de casos es mayor.
+
+```bash
+dotnet test --filter "FullyQualifiedName~FleetManagement.Application.Tests.RouteSheets"
+dotnet test --filter "FullyQualifiedName~RouteSheetAndInterpreterDesignTests"
+dotnet test                       # toda la suite
+```
+
+**Estado de la verificación.** Este código y sus pruebas se escribieron **sin poder compilar ni ejecutar nada** (el entorno de trabajo no tiene
+`dotnet`). Se revisaron a mano (lectura, balance de llaves, tamaño de métodos y clases, diff contra el original), pero **no hay resultados
+de ejecución que mostrar**: ejecute `dotnet build` y `dotnet test` antes de darlo por bueno.
+
+**Interfaz.** La presentación (`frontend/js/routesheet.js`) se probó en un Chromium sin cabeza contra una **API simulada** (sin Leaflet ni backend reales): botón por ruta sin duplicarse al redibujar la tabla, selector de audiencia, orden fijo de los pasos, pasos atenuados, el 400 de una audiencia inválida, el portal del operador, el escape del HTML y que un enlace que no sea http(s) no se escriba en un `href`. **No** se probó contra el backend real: eso queda por verificar al ejecutarlo.
+
+### 8.22 Interpreter — reglas de mantenimiento y filtros de monitoreo escritos como texto
+
+El módulo predictivo ya avisa cuándo un vehículo necesita mantenimiento, pero sus umbrales están escritos en el código. Quien administra
+la flota quiere **formular sus propias reglas** («vehículos con 8 000 km o más desde el último servicio, o más de 180 días sin
+revisión») y **filtrar el monitoreo** («camiones disponibles sin conductor») sin esperar un despliegue. Aceptar una expresión de texto y
+ejecutarla con `eval`, reflexión o compilación dinámica sería inseguro. El **Interpreter** da un lenguaje pequeño y cerrado, con su
+gramática, que se convierte en un **árbol de objetos** y se evalúa contra los datos de cada vehículo.
+
+> **Objetivo que cubre.** Complementa el **mantenimiento predictivo** y el **monitoreo de la flota**: son consultas de **solo lectura**
+> que **no reemplazan** al módulo predictivo (`MaintenanceService`) ni al análisis de la flota ([8.20](#820-visitor--analizar-la-flota-sin-cargar-las-entidades-con-análisis)); los complementan. La regla
+> «de Mantenimiento a Disponible solo registrando el mantenimiento» ([8.19](#819-state--qué-puede-hacer-un-vehículo-según-su-estado)) sigue intacta: el intérprete nunca cambia un estado.
+
+#### 1. Descripción del patrón
+
+Interpreter representa una gramática como una **jerarquía de clases**: cada regla de la gramática es una expresión y cada expresión sabe
+**interpretarse** a sí misma contra un contexto. Aquí hay seis expresiones, todas con una única operación, `Interpret(context)`:
+
+| Expresión | Gramática | Qué devuelve |
+|-----------|-----------|--------------|
+| `LiteralExpression` | número o `"texto"` | su valor |
+| `VariableExpression` | nombre de variable | lo que el contexto responde para ese nombre |
+| `ComparisonExpression` | `valor op valor` | `bool` |
+| `NotExpression` | `NOT` expresión | `bool` |
+| `AndExpression` | expresión `AND` expresión | `bool` (no evalúa el lado derecho si el izquierdo ya es falso) |
+| `OrExpression` | expresión `OR` expresión | `bool` (no evalúa el lado derecho si el izquierdo ya es verdadero) |
+
+**Gramática** (la precedencia sale de la forma de las producciones: `NOT` antes que `AND`, y `AND` antes que `OR`):
+
+```
+rule       := or
+or         := and ("OR" and)*
+and        := not ("AND" not)*
+not        := "NOT" not | comparison | "(" rule ")"
+comparison := value op value
+op         := =  |  !=  |  >  |  >=  |  <  |  <=
+value      := número | "texto" | variable
+```
+
+Las palabras `AND`, `OR` y `NOT` no distinguen mayúsculas, ni los nombres de variable, ni la comparación de textos (`"available"` = `"Available"`).
+Los números aceptan signo y decimales (`-5.5`). El árbol de `kmSinceLastService >= 8000 OR daysSinceLastService > 180` es:
+
+```
+Or
+├─ Comparison(>=)  ── Variable(kmSinceLastService), Literal(8000)
+└─ Comparison(>)   ── Variable(daysSinceLastService), Literal(180)
+```
+
+#### 2. Justificación de su utilización
+
+| Problema real del proyecto | Cómo lo resuelve el Interpreter |
+|----------------------------|----------------------------------|
+| Los umbrales del mantenimiento predictivo están fijos en el código; cambiarlos exige compilar y desplegar. | Una regla es un texto que el administrador envía por la API; el árbol se construye en cada petición. |
+| Hay que filtrar vehículos por combinaciones de estado, tipo, kilometraje, capacidad y conductor. | Los operadores `AND`, `OR`, `NOT` y los paréntesis combinan comparaciones; no hace falta un endpoint por filtro. |
+| Evaluar texto escrito por una persona es una superficie de ataque. | No hay `eval`, reflexión ni compilación dinámica: el analizador **solo puede producir las seis clases de expresión**; las variables permitidas son una lista cerrada; la regla tiene límites de longitud y de anidamiento. |
+| Dos usos distintos (mantenimiento y monitoreo) con datos distintos. | Las expresiones **no cambian**: lo que cambia es el **contexto** (qué variables existen y qué valen). |
+
+**Qué le toca a cada patrón (no se duplican responsabilidades):**
+
+| Patrón | Responsabilidad que **conserva** | Qué hace el Interpreter en esa frontera |
+|--------|----------------------------------|------------------------------------------|
+| **Módulo predictivo de mantenimiento** (`MaintenanceService`) | Calcular qué vehículos están vencidos con sus reglas actuales. | Nada: no lo reemplaza ni lo llama; ofrece reglas adicionales sobre los mismos datos. |
+| **State** ([8.19](#819-state--qué-puede-hacer-un-vehículo-según-su-estado)) | Decidir qué estado puede pasar a cuál; Mantenimiento → Disponible solo registrando el mantenimiento. | Solo **lee** `status`; no cambia ningún estado. |
+| **Visitor** ([8.20](#820-visitor--analizar-la-flota-sin-cargar-las-entidades-con-análisis)) | Análisis fijos de la flota sobre elementos de tipos distintos. | Es otro problema: aquí lo que varía es la **regla**, no la operación. No comparte código con el análisis. |
+| **Strategy** ([8.11](#811-strategy--optimizar-paradas-y-repartir-cargas)) | Intercambiar algoritmos. | Nada: las expresiones no son algoritmos intercambiables, son un árbol que se evalúa. |
+| **Template Method de la hoja de ruta** ([8.21](#821-template-method--la-hoja-de-ruta-un-esqueleto-contenido-distinto-por-audiencia)) | Armar la hoja de ruta. | Nada: los dos patrones no se referencian entre sí (una prueba de diseño lo vigila). |
+
+#### 3. Ubicación de la implementación
+
+Todo es nuevo y vive en `src/FleetManagement.Application/Interpreter/`:
+
+| Archivo | Qué contiene |
+|---------|--------------|
+| `IExpression.cs` | El contrato de las expresiones: **una** operación, `Interpret(context)`, con el tipo de su resultado. |
+| `IRuleContext.cs` | El **contexto** de solo lectura: **un** método, `Resolve(variable)`. |
+| `TerminalExpressions.cs` | Expresiones **terminales**: `LiteralExpression` y `VariableExpression`. |
+| `ComparisonExpression.cs`, `ComparisonOperators.cs` | La comparación y la **tabla** símbolo → operador (sin `switch`). |
+| `LogicalExpressions.cs` | **No terminales**: `AndExpression`, `OrExpression`, `NotExpression`. |
+| `RuleValue.cs` | Valor de una regla: número, texto o **sin dato** (`Missing`), comparados por doble despacho (sin preguntar por el tipo). |
+| `Token.cs`, `RuleTokenizer.cs` | El **analizador léxico**: texto → piezas con su posición. Fuera de las expresiones. |
+| `RuleGrammar.cs`, `RuleParser.cs`, `RuleLimits.cs`, `RuleVocabulary.cs` | El **analizador sintáctico** (descenso recursivo, un método por producción), los límites y la lista cerrada de variables. Fuera de las expresiones. |
+| `RuleSyntaxException.cs` | Error propio, con **mensaje en español y posición**. |
+| `VariableContext.cs`, `MaintenanceRuleContext.cs`, `VehicleMonitoringContext.cs`, `RuleVariables.cs` | Los dos **contextos** y los nombres de las variables. |
+| `RuleScopes.cs`, `RuleEvaluationService.cs` | Qué vehículos y variables usa cada caso de uso y el servicio de solo lectura que los une. |
+| `src/FleetManagement.Api/Controllers/RulesController.cs` | `POST api/rules/maintenance/evaluate` y `POST api/rules/vehicles/filter`. |
+| **Modificado:** `src/FleetManagement.Api/Program.cs` | Los registros (sección «Integración»). **Ningún patrón, servicio, entidad ni prueba existente se modificó.** |
+| Pruebas: `tests/FleetManagement.Application.Tests/Interpreter/` y `Architecture/RouteSheetAndInterpreterDesignTests.cs` | Ver «Pruebas de funcionamiento». |
+
+#### 4. Diagrama UML
+
+```mermaid
+classDiagram
+    direction LR
+    class IExpression {
+        <<interface>>
+        +Interpret(context) TResult
+    }
+    class IRuleContext {
+        <<interface>>
+        +Resolve(variable) RuleValue
+    }
+    class LiteralExpression
+    class VariableExpression
+    class ComparisonExpression
+    class AndExpression
+    class OrExpression
+    class NotExpression
+    class VariableContext {
+        <<abstract>>
+    }
+    class MaintenanceRuleContext
+    class VehicleMonitoringContext
+    IExpression <|.. LiteralExpression : terminal
+    IExpression <|.. VariableExpression : terminal
+    IExpression <|.. ComparisonExpression
+    IExpression <|.. AndExpression
+    IExpression <|.. OrExpression
+    IExpression <|.. NotExpression
+    AndExpression o-- IExpression : izquierda y derecha
+    OrExpression o-- IExpression : izquierda y derecha
+    NotExpression o-- IExpression : operando
+    ComparisonExpression o-- IExpression : dos valores
+    VariableExpression ..> IRuleContext : pregunta
+    IRuleContext <|.. VariableContext
+    VariableContext <|-- MaintenanceRuleContext
+    VariableContext <|-- VehicleMonitoringContext
+```
+
+```mermaid
+flowchart LR
+    T["Texto de la regla"] --> L["RuleTokenizer - piezas con posicion"]
+    L --> G["RuleGrammar - descenso recursivo"]
+    V["RuleVocabulary - variables permitidas"] --> G
+    G -->|"RuleSyntaxException con posicion: 400"| E(["La API responde 400 con message"])
+    G --> A["Arbol de expresiones - inmutable"]
+    A --> I["Interpret por cada vehiculo"]
+    C["Contexto del vehiculo - MaintenanceRuleContext o VehicleMonitoringContext"] --> I
+    I --> R["Vehiculos que cumplen la regla"]
+```
+
+#### 5. Interfaces y clases participantes
+
+| Participante | Rol | Detalle |
+|--------------|-----|---------|
+| `IExpression<TResult>` | **Expresión abstracta** | Una sola operación. La gramática queda en los **tipos**: `And`, `Or` y `Not` reciben `IExpression<bool>`; la comparación recibe dos `IExpression<RuleValue>`. |
+| `LiteralExpression`, `VariableExpression` | **Terminales** | Un valor y una pregunta al contexto. |
+| `ComparisonExpression`, `AndExpression`, `OrExpression`, `NotExpression` | **No terminales** | Se construyen con otras expresiones; son registros **inmutables** (se comparan por estructura y se pueden compartir). |
+| `IRuleContext` | **Contexto** | Solo lectura, un método. Una variable sin dato responde `RuleValue.Missing`. |
+| `MaintenanceRuleContext` | Contexto de mantenimiento | `mileageKm`, `vehicleAgeYears`, `daysSinceLastService`, `kmSinceLastService`, `type`, `status`. El «hoy» sale de `TimeProvider`. |
+| `VehicleMonitoringContext` | Contexto de monitoreo | `status`, `type`, `mileageKm`, `capacityKg`, `hasDriver`. |
+| `RuleTokenizer`, `RuleGrammar`, `RuleParser` | **Cliente** que construye el árbol | Separados de las expresiones: estas solo interpretan. |
+| `RuleEvaluationService` | Caso de uso | Analiza la regla **antes** de leer los repositorios, y luego la interpreta sobre cada vehículo. |
+
+**Variables.**
+
+| Variable | Contexto | Qué vale |
+|----------|----------|----------|
+| `mileageKm` | ambos | Kilometraje del vehículo |
+| `status`, `type` | ambos | Nombre del estado (`Available`, `EnRoute`, `Maintenance`, `OutOfService`) y del tipo (`Truck`, `Van`, `Car`, `Motorcycle`) |
+| `vehicleAgeYears` | mantenimiento | Año actual menos el año del vehículo (nunca negativo) |
+| `daysSinceLastService` | mantenimiento | Días **enteros** desde el último mantenimiento (el de fecha más reciente; con la misma fecha, el de más kilómetros); nunca negativo |
+| `kmSinceLastService` | mantenimiento | Kilometraje del vehículo menos el del último mantenimiento; nunca negativo |
+| `capacityKg` | monitoreo | Capacidad de carga |
+| `hasDriver` | monitoreo | **1** con conductor asignado y **0** sin él: la gramática no tiene booleanos, así que se usa un número |
+
+**Una variable sin dato nunca coincide.** Si un vehículo **no tiene ningún mantenimiento**, `daysSinceLastService` y `kmSinceLastService` no
+valen 0: **no tienen dato**, y **toda comparación con un dato faltante es falsa** (con cualquier operador, `!=` incluido). No se inventa un 0
+ni se lanza una excepción. Consecuencia documentada: `NOT kmSinceLastService > 5` **sí** coincide con un vehículo sin mantenimientos, porque la
+comparación es falsa y `NOT` la invierte. Y comparar un número con un texto es igualmente falso.
+
+#### 6. Funcionamiento dentro del sistema
+
+**Endpoints** (nuevos; el controlador exige el rol **Admin**, igual que la consulta de la bitácora; usan `POST` solo porque la regla viaja en el cuerpo, **no modifican nada**):
+
+| Método | Ruta | Cuerpo | Para qué |
+|--------|------|--------|----------|
+| POST | `/api/rules/maintenance/evaluate` | `{ "rule": "kmSinceLastService >= 8000 OR daysSinceLastService > 180" }` | Vehículos que cumplen una regla de mantenimiento predictivo |
+| POST | `/api/rules/vehicles/filter` | `{ "rule": "status = \"Available\" AND type = \"Truck\"" }` | Vehículos que cumplen un filtro de monitoreo |
+
+Respuesta (forma **ilustrativa**, no es salida de una ejecución): `{ "rule": "...", "evaluatedVehicles": 5, "matchedVehicles": 1, "vehicles": [ { "vehicleId": "...", "licensePlate": "...", "type": "Truck", "status": "Available" } ] }`.
+
+**Regla inválida → 400** con `{ "message": ... }` en español y la posición del problema (el primer carácter es el 1):
+
+| Regla | Mensaje |
+|-------|---------|
+| `mileageKm >` | `Se esperaba un valor (número, texto entre comillas o variable) pero se encontró el final de la regla. (posición 12)` |
+| `fuel > 5` | `La variable 'fuel' no existe. Variables permitidas: …. (posición 1)` (lista las del caso de uso) |
+| `mileageKm > 5)` | `Sobra ')' después de la regla. (posición 14)` |
+| `a = 1; DROP` | `Carácter inesperado ';' (posición 6)` |
+| *(vacía)* | `La regla está vacía. (posición 1)` |
+
+**Seguridad.** No hay `eval`, reflexión ni compilación dinámica; no se leen propiedades por nombre (las variables son una lista cerrada
+por contexto, y `System.Environment`, `_hidden` o `a.b` ni siquiera se tokenizan); la longitud máxima por defecto es **500** caracteres y el
+anidamiento máximo (paréntesis y `NOT` encadenados) es **10**, para que una regla no pueda agotar la pila ni la CPU.
+
+**Solo lectura.** Evaluar una regla no cambia vehículos, estados ni mantenimientos; no audita ni notifica (una prueba lo comprueba).
+
+#### 7. Integración con los demás componentes
+
+**Cambios en archivos existentes:** solo `Api/Program.cs`.
+
+```csharp
+builder.Services.AddSingleton(RuleLimits.Default);
+builder.Services.AddSingleton<IRuleParser, RuleParser>();
+builder.Services.AddScoped<MaintenanceRuleScope>();
+builder.Services.AddScoped<MonitoringRuleScope>();
+builder.Services.AddScoped<IRuleEvaluationService>(provider => new RuleEvaluationService(
+    provider.GetRequiredService<IRuleParser>(),
+    provider.GetRequiredService<MaintenanceRuleScope>(),
+    provider.GetRequiredService<MonitoringRuleScope>()));
+```
+
+| Pieza | Ciclo de vida | Por qué |
+|-------|---------------|---------|
+| `RuleParser` y `RuleLimits` | **Singleton** | No guardan estado entre reglas (cada regla crea su propio analizador interno). |
+| Los dos alcances (`MaintenanceRuleScope`, `MonitoringRuleScope`) y el servicio | **Scoped** | Leen repositorios y el reloj como los demás servicios. Son del mismo tipo de interfaz (`IRuleScope`), por eso se cablean a mano, como el Decorator de las reglas de asignación. |
+| Expresiones y contextos | **No se registran** | Se crean en cada petición con los datos de ese momento. |
+
+**Con el resto del sistema.** El alcance de mantenimiento lee los vehículos y sus registros de mantenimiento (los repositorios que ya existían)
+y el reloj; el de monitoreo, solo los vehículos. Agregar un tercer caso de uso es un contexto y un alcance nuevos: **las expresiones y el
+analizador no cambian** (una prueba define un contexto ajeno y evalúa una regla sobre él).
+
+**Qué no cambió.** `MaintenanceService` y su módulo predictivo, `VehicleStateContext` y los estados, el análisis de la flota (Visitor), los
+reportes y todas las entidades de dominio.
+
+#### 8. Principios SOLID aplicados
+
+| Principio | Cómo se cumple |
+|-----------|----------------|
+| **S** — Responsabilidad única | Cada expresión es una regla de la gramática; el tokenizador reconoce piezas; la gramática arma el árbol; el contexto responde variables; el alcance dice qué vehículos y variables; el servicio orquesta. |
+| **O** — Abierto/Cerrado | Un operador de comparación nuevo es **una fila** en la tabla; un contexto nuevo no cambia ninguna expresión. Un operador **lógico** nuevo sí exige una expresión nueva y un cambio en la gramática: ese conjunto es cerrado a propósito. |
+| **L** — Sustitución de Liskov | Cualquier `IExpression<bool>` se puede usar donde se espera una; cualquier `IRuleContext` sirve a cualquier expresión; `Missing` es un valor más que se compara como no comparable, sin excepciones. |
+| **I** — Segregación de interfaces | Contratos de uno o dos miembros: `IExpression` (1), `IRuleContext` (1), `IRuleParser` (1), `IRuleScope` (2). |
+| **D** — Inversión de dependencias | Las expresiones solo conocen `IRuleContext`; el servicio depende de `IRuleParser`, `IRuleScope` y de `TimeProvider`; `Application` no referencia `Infrastructure` ni `Api`. |
+
+#### 9. Límites y decisiones
+
+- **Sin booleanos ni funciones.** La gramática es mínima a propósito; `hasDriver` es 1/0 por eso. Agregar funciones o aritmética sería ampliar el lenguaje, no una consecuencia del patrón.
+- **Sin dato ≠ 0.** Un vehículo sin mantenimientos no cumple reglas sobre días o kilómetros desde el último servicio (ni siquiera `>= 0`), pero sí cumple `NOT kmSinceLastService > 5`. Es una consecuencia de la regla «falso si falta el dato», no un error.
+- **Solo datos existentes.** No se agregó ningún campo a las entidades: `vehicleAgeYears` sale del año del vehículo y las cifras de servicio del historial de mantenimiento.
+- **Las reglas no se guardan.** Se evalúan en la petición; no hay reglas persistentes ni programadas (eso sería otra funcionalidad).
+- **Rendimiento.** Cada petición construye el árbol y lo evalúa sobre todos los vehículos: adecuado para una flota de prototipo; con miles de vehículos habría que limitar o paginar.
+- **Alcance del diseño.** Las pruebas de arquitectura leen las firmas de los tipos; que no haya `eval` ni reflexión se vigila además a nivel de ensamblado y con pruebas de comportamiento del analizador, no leyendo el cuerpo de cada método.
+
+#### 10. Pruebas de funcionamiento
+
+Carpeta `tests/FleetManagement.Application.Tests/Interpreter/`, sin librerías de mocking (dobles escritos a mano, `ManualTimeProvider` para el reloj
+y la flota real en memoria para el caso de uso):
+
+| Archivo | Métodos de prueba* | Qué demuestra |
+|---------|-------------------:|----------------|
+| `ExpressionTests.cs` | 15 | Cada expresión por separado, sin analizador: literales, variable (pregunta al contexto), `AND`/`OR`/`NOT` con su tabla de verdad y su cortocircuito, los seis operadores con números y textos, número contra texto, dato faltante, la tabla de operadores e inmutabilidad (igualdad por estructura). |
+| `RuleTokenizerTests.cs` | 10 | Piezas y posiciones, palabras clave sin distinguir mayúsculas, operadores sin espacios (el más largo primero), textos con símbolos y palabras reservadas, números con signo y decimales, y los errores de carácter con su posición. |
+| `RuleParserTests.cs` | 21 | **Tabla de reglas válidas e inválidas** con el mensaje y la posición esperados; la **precedencia** (`NOT` > `AND` > `OR`) con tablas de verdad; paréntesis; variables fuera de la lista; **límites** de longitud y de anidamiento; el analizador no guarda estado y se usa desde varios hilos. |
+| `RuleContextTests.cs` | 18 | Los dos contextos con un reloj manual: edad, último servicio (por fecha, y a igualdad por kilómetros), días enteros, nunca negativos, **sin mantenimientos = sin dato**, el vocabulario exacto de cada contexto, `hasDriver` 1/0, la regla predictiva con sus umbrales exactos y que el contexto no modifica nada. |
+| `RuleEvaluationServiceTests.cs` | 12 | **Extremo a extremo** con la flota real: reglas de mantenimiento y filtros de monitoreo con los vehículos esperados; una regla inválida se rechaza **antes** de leer los repositorios; es de solo lectura (sin cambios, auditoría ni avisos) y un vehículo en Mantenimiento sigue en Mantenimiento; con los datos de demostración; un caso de uso ajeno se agrega sin cambiar el analizador ni las expresiones. |
+| `Architecture/RouteSheetAndInterpreterDesignTests.cs` (parte del Interpreter) | — | El código existente no conoce `Interpreter`; solo depende del dominio y de repositorios; sin Roslyn ni generación dinámica de código; interfaces mínimas; seis expresiones inmutables con una sola operación pública; solo dos terminales; valores inmutables; sin estado estático mutable. |
+
+\* Se cuentan **métodos** `[Fact]`/`[Theory]`; una `[Theory]` se ejecuta una vez por cada fila de datos, así que el total de casos es mayor.
+
+```bash
+dotnet test --filter "FullyQualifiedName~FleetManagement.Application.Tests.Interpreter"
+dotnet test --filter "FullyQualifiedName~RouteSheetAndInterpreterDesignTests"
+dotnet test                       # toda la suite
+```
+
+**Estado de la verificación.** Igual que en 8.21: se escribió **sin poder compilar ni ejecutar nada** (sin `dotnet` en el entorno de trabajo). Se
+revisó a mano, pero **no hay resultados de ejecución que mostrar** y ninguna cifra de pruebas «verdes»: ejecute `dotnet build` y `dotnet test` antes de darlo por bueno.
+
 ---
 
 ## 9. Documentación de la API REST
@@ -3439,7 +3991,7 @@ pasan tal cual. Siguen sin usar librerías de mocking: repositorios en memoria r
 | `State/VehicleStateTripTrackingTests.cs` (16) | La simulación solo mueve un viaje mientras la ruta está activa **y** el vehículo En ruta; la simulación y la consulta de avance coinciden. |
 | `State/VehicleStateAssignmentTests.cs` (15) | Las reglas de asignación aceptan o rechazan según lo que el estado permite, con los mismos mensajes. |
 | `State/VehicleStateDesignTests.cs` (11) | Pruebas de arquitectura: exactamente cuatro estados, los componentes consultan al resolutor y nunca a un estado concreto, `Vehicle` conserva su enumerado y no conoce los estados. |
-| `State/VehicleStateLifecycleScenarioTests.cs` (4) | Escenarios completos (un vehículo que va al taller a mitad de un viaje se queda allí cuando el viaje termina). |
+| `State/VehicleStateLifecycleScenarioTests.cs` (4) | Escenarios completos (un vehículo que va al taller a mitad de un viaje se queda allí cuando el viaje termina y solo sale registrando su mantenimiento). |
 | `Observer/VehicleTelemetryPublisherTests.cs` (27) | Registro y retirada sin duplicados, notificación a todos en orden, **sin recursión** (un evento publicado por un observador se encola), corte de ciclos, aislamiento de fallos con auditoría y **muchos hilos** publicando y suscribiendo. |
 | `Observer/TripTelemetryEventsTests.cs` (18) | Los eventos de un paso (movimiento, paradas en orden, llegada), una parada justo en el extremo del paso (se informa una vez) y que calcularlos no cambia el viaje. |
 | `Observer/LiveTelemetryBoardTests.cs` (16) | El tablero: una entrada por vehículo, la última parada solo dentro del mismo viaje, la llegada conserva los datos, orden por placa e instantáneas inmutables, también con escritores y lectores concurrentes. |

@@ -22,7 +22,7 @@ public class VehicleStateLifecycleScenarioTests
     private IEnumerable<string> VehicleAudit() => _fleet.Audit.Entries.Where(entry => entry.Category == "Vehículo").Select(entry => entry.Message);
 
     [Fact]
-    public async Task AVehicleThatGoesToTheWorkshopMidTrip_StaysThereWhenTheTripEnds_AndComesBackThroughAvailable()
+    public async Task AVehicleThatGoesToTheWorkshopMidTrip_StaysThereWhenTheTripEnds_AndOnlyLeavesItWhenItsMaintenanceIsRegistered()
     {
         var truck = (await _fleet.SeedAsync())["TRK-001"];                      // Disponible
         var route = await _fleet.RouteRepository.AddAsync(new DeliveryRoute { Name = "Entrega urgente", Status = DeliveryRouteStatus.Planned, AssignedVehicleId = truck.Id });
@@ -39,7 +39,14 @@ public class VehicleStateLifecycleScenarioTests
         Assert.Equal(VehicleStatus.EnRoute, rejected.To);
         Assert.Equal(VehicleStatus.Maintenance, truck.Status);
 
-        await SetStatusAsync(truck, "Available");                                // sale del taller
+        var byHand = await Assert.ThrowsAsync<InvalidVehicleTransitionException>(() => SetStatusAsync(truck, "Available"));   // tampoco sale del taller a mano
+        Assert.Equal(VehicleStatus.Available, byHand.To);
+        Assert.Equal(VehicleStatus.Maintenance, truck.Status);
+
+        await _fleet.Maintenance.CreateAsync(new CreateMaintenanceRecordRequest(                                  // sale del taller al registrarse su mantenimiento
+            truck.Id, "OilChange", new DateTime(2026, 3, 1, 8, 0, 0, DateTimeKind.Utc), null, 60000, "Cambio de aceite", 50000));
+        Assert.Equal(VehicleStatus.Available, truck.Status);
+
         await SetStatusAsync(truck, "EnRoute");                                  // y recién entonces puede volver a ruta
         Assert.Equal(VehicleStatus.EnRoute, truck.Status);
 
@@ -47,10 +54,12 @@ public class VehicleStateLifecycleScenarioTests
             new[]
             {
                 "Vehículo TRK-001 cambió de estado: EnRoute -> Maintenance.",
-                "Vehículo TRK-001 cambió de estado: Maintenance -> Available.",
                 "Vehículo TRK-001 cambió de estado: Available -> EnRoute."
             },
-            VehicleAudit());                                                     // el cambio rechazado no dejó ningún rastro
+            VehicleAudit());                                                     // los cambios rechazados no dejaron ningún rastro, y salir del taller no es un cambio manual
+        Assert.Contains(
+            _fleet.Audit.Entries,
+            entry => entry.Category == "Mantenimiento" && entry.Message == "Registrado mantenimiento 'OilChange' para el vehículo TRK-001.");
     }
 
     [Fact]

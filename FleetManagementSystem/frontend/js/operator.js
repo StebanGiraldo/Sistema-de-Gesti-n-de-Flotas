@@ -101,7 +101,9 @@ function showRoute(route) {
   badge.textContent = ROUTE_STATUS_LABELS[route.status] || route.status;
   badge.className = `badge badge-${route.status}`;
 
-  document.getElementById('routeStatusSelect').value = route.status;
+  // El refresco periódico no debe pisar el selector mientras el conductor lo está usando.
+  const statusSelect = document.getElementById('routeStatusSelect');
+  if (document.activeElement !== statusSelect) statusSelect.value = route.status;
   document.getElementById('routeDistance').textContent = `${route.estimatedDistanceKm} km`;
   document.getElementById('routeDuration').textContent = `${Math.round(route.estimatedDurationMinutes)} min`;
   document.getElementById('routeScheduled').textContent = route.scheduledDate
@@ -254,13 +256,17 @@ async function refreshProgress() {
 // --- Cambiar estado de la ruta ---
 document.getElementById('routeStatusSelect').addEventListener('change', async (e) => {
   if (!currentRoute) return;
+  const select = e.target;
   try {
-    await FleetAPI.updateRouteStatus(currentRoute.id, e.target.value);
+    await FleetAPI.updateRouteStatus(currentRoute.id, select.value);
     showToast('Estado de la ruta actualizado.', 'success');
-    await loadMyRoute();
   } catch (err) {
     showToast(err.message, 'error');
   }
+  // Se suelta el selector y se vuelve a leer la ruta: así el selector muestra el estado real, también cuando la API rechazó el
+  // cambio (antes se quedaba mostrando el estado rechazado).
+  select.blur();
+  await loadMyRoute();
 });
 
 // --- Reportar alerta/complicación ---

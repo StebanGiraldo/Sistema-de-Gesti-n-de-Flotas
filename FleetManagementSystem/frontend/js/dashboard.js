@@ -56,6 +56,20 @@ function formatDateTime(iso) {
   return new Date(iso).toLocaleString('es-CO', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
+// Un <input type="date"> entrega "AAAA-MM-DD" sin zona horaria, y new Date("AAAA-MM-DD") lo toma como medianoche UTC: en Colombia
+// (UTC-5) eso es el día anterior a las 19:00, así que la fecha se guardaba y se mostraba un día antes (y un vencimiento se marcaba
+// como vencido unas horas antes). Se usa el mediodía LOCAL para que el día no cambie en ninguna zona horaria, y "hoy" se toma de la
+// fecha local (toISOString() da la UTC, que después de las 19:00 ya es "mañana").
+function dateInputToIso(value) {
+  return value ? new Date(`${value}T12:00:00`).toISOString() : null;
+}
+
+function todayInputValue() {
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+}
+
 function showToast(message, type = 'info') {
   const stack = document.getElementById('toastStack');
   const toast = document.createElement('div');
@@ -146,33 +160,61 @@ function tripProgressHtml(vehicle, render) {
   return trip ? render(trip) : '';
 }
 
+// Regla del backend (MaintenanceState): un vehículo en Mantenimiento solo queda Disponible al REGISTRAR su mantenimiento, no desde
+// este selector. La API lo rechaza de todos modos (400); aquí solo se evita ofrecer la opción y se explica cómo salir del taller.
 function popupHtml(v) {
+  const inWorkshop = v.status === 'Maintenance';
   return `
     <strong>${escapeHtml(v.licensePlate)}</strong> — ${escapeHtml(v.brand)} ${escapeHtml(v.model)}<br/>
     ${v.assignedDriverName ? 'Conductor: ' + escapeHtml(v.assignedDriverName) : 'Sin conductor asignado'}<br/>
     ${Math.round(v.mileageKm).toLocaleString('es-CO')} km recorridos<br/>
     ${tripProgressHtml(v, TripProgressUI.html)}
     <select class="vehicle-status-select" data-id="${v.id}" style="margin-top:6px;width:100%;padding:4px;border-radius:6px;">
-      <option value="Available" ${v.status === 'Available' ? 'selected' : ''}>Disponible</option>
+      <option value="Available" ${v.status === 'Available' ? 'selected' : ''} ${inWorkshop ? 'disabled' : ''}>Disponible</option>
       <option value="EnRoute" ${v.status === 'EnRoute' ? 'selected' : ''}>En ruta</option>
       <option value="Maintenance" ${v.status === 'Maintenance' ? 'selected' : ''}>Mantenimiento</option>
       <option value="OutOfService" ${v.status === 'OutOfService' ? 'selected' : ''}>Fuera de servicio</option>
     </select>
+    ${inWorkshop ? '<small style="display:block;margin-top:4px;opacity:.75;">Para dejarlo Disponible, registre su mantenimiento (pestaña «Mantenimiento predictivo»).</small>' : ''}
   `;
+}
+
+// El popup se vuelve a dibujar en cada refresco (cada 5 s) para mostrar datos nuevos, pero NO mientras el usuario usa su selector
+// de estado: reconstruir el <select> con la lista desplegada la cierra y devuelve la opción anterior, y por eso a veces no dejaba
+// cambiar el estado (p. ej. de Mantenimiento a Disponible). Tampoco se toca el DOM si el contenido no cambió.
+const popupHtmlByMarker = new WeakMap();
+
+function isUsingStatusSelect(marker) {
+  const popup = marker.getPopup();
+  const popupElement = popup && marker.isPopupOpen() ? popup.getElement() : null;
+  const active = document.activeElement;
+  return Boolean(popupElement && active && popupElement.contains(active) && active.classList.contains('vehicle-status-select'));
+}
+
+function refreshVehiclePopup(marker, vehicle) {
+  if (isUsingStatusSelect(marker)) return;
+  const html = popupHtml(vehicle);
+  if (popupHtmlByMarker.get(marker) === html) return;
+  popupHtmlByMarker.set(marker, html);
+  marker.getPopup().setContent(html);
 }
 
 // Delegación de eventos: el select de estado vive dentro de un popup de Leaflet creado dinámicamente.
 document.addEventListener('change', async (e) => {
-  if (e.target.classList.contains('vehicle-status-select')) {
-    try {
-      await FleetAPI.updateVehicleStatus(e.target.dataset.id, e.target.value);
-      showToast('Estado del vehículo actualizado.', 'success');
-      await refreshVehicles(true);
-    } catch (err) {
-      showToast(err.message, 'error');
-      await refreshVehicles(true); // el select vuelve al estado real del vehículo
-    }
+  const select = e.target;
+  if (!select.classList || !select.classList.contains('vehicle-status-select')) return;
+
+  try {
+    await FleetAPI.updateVehicleStatus(select.dataset.id, select.value);
+    showToast('Estado del vehículo actualizado.', 'success');
+  } catch (err) {
+    showToast(err.message, 'error');
   }
+
+  // Se suelta el selector para que el refresco pueda volver a dibujar el popup; así el select muestra el estado real del
+  // vehículo (el nuevo si se aceptó, el anterior si la API rechazó el cambio).
+  select.blur();
+  await refreshVehicles(true);
 });
 
 // El avance de los viajes es información complementaria: si su consulta falla, el mapa sigue mostrando los vehículos
@@ -232,9 +274,11 @@ function renderMarkers() {
     if (marker) {
       MarkerMotion.glide(marker, latlng, POLL_INTERVAL_MS);
       if (marker.options.icon !== icon) marker.setIcon(icon);
-      marker.getPopup().setContent(popupHtml(v));
+      refreshVehiclePopup(marker, v);
     } else {
-      markers[v.id] = L.marker(latlng, { icon }).addTo(map).bindPopup(popupHtml(v));
+      const html = popupHtml(v);
+      markers[v.id] = L.marker(latlng, { icon }).addTo(map).bindPopup(html);
+      popupHtmlByMarker.set(markers[v.id], html);
     }
   });
   Object.keys(markers).forEach(id => {
@@ -586,7 +630,7 @@ document.getElementById('createRouteBtn').addEventListener('click', async () => 
         waypoints: waypointsDraft, cargoItems: cargoDraft,
         assignedVehicleId: fd.get('assignedVehicleId') || null,
         assignedDriverId: fd.get('assignedDriverId') || null,
-        scheduledDate: scheduledDateRaw ? new Date(scheduledDateRaw).toISOString() : null
+        scheduledDate: dateInputToIso(scheduledDateRaw)
       });
       closeModal();
       showToast('Ruta creada paso a paso (patrón Builder).', 'success');
@@ -735,7 +779,7 @@ document.getElementById('registerMaintenanceBtn').addEventListener('click', () =
           </select>
         </div>
         <div class="field-row">
-          <div class="field"><label>Fecha realizado</label><input required type="date" name="performedAt" value="${new Date().toISOString().slice(0,10)}" /></div>
+          <div class="field"><label>Fecha realizado</label><input required type="date" name="performedAt" value="${todayInputValue()}" /></div>
           <div class="field"><label>Próximo vencimiento</label><input type="date" name="nextDueDate" /></div>
         </div>
         <div class="field-row">
@@ -757,8 +801,8 @@ document.getElementById('registerMaintenanceBtn').addEventListener('click', () =
     try {
       await FleetAPI.createMaintenance({
         vehicleId: fd.get('vehicleId'), type: fd.get('type'),
-        performedAt: new Date(fd.get('performedAt')).toISOString(),
-        nextDueDate: fd.get('nextDueDate') ? new Date(fd.get('nextDueDate')).toISOString() : null,
+        performedAt: dateInputToIso(fd.get('performedAt')),
+        nextDueDate: dateInputToIso(fd.get('nextDueDate')),
         nextDueMileageKm: fd.get('nextDueMileageKm') ? parseFloat(fd.get('nextDueMileageKm')) : null,
         notes: fd.get('notes') || '',
         mileageAtServiceKm: parseFloat(fd.get('mileageAtServiceKm'))

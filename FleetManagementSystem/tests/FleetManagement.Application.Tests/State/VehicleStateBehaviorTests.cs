@@ -185,7 +185,7 @@ public class VehicleStateBehaviorTests
     [InlineData(VehicleStatus.EnRoute,      VehicleStatus.EnRoute,      true)]
     [InlineData(VehicleStatus.EnRoute,      VehicleStatus.Maintenance,  true)]
     [InlineData(VehicleStatus.EnRoute,      VehicleStatus.OutOfService, true)]
-    [InlineData(VehicleStatus.Maintenance,  VehicleStatus.Available,    true)]
+    [InlineData(VehicleStatus.Maintenance,  VehicleStatus.Available,    false)]   // del taller solo se sale registrando el mantenimiento
     [InlineData(VehicleStatus.Maintenance,  VehicleStatus.EnRoute,      false)]
     [InlineData(VehicleStatus.Maintenance,  VehicleStatus.Maintenance,  true)]
     [InlineData(VehicleStatus.Maintenance,  VehicleStatus.OutOfService, true)]
@@ -209,18 +209,60 @@ public class VehicleStateBehaviorTests
         }
     }
 
-    [Theory]
-    [InlineData(VehicleStatus.Maintenance)]
-    [InlineData(VehicleStatus.OutOfService)]
-    public void AVehicleThatCannotOperate_MustBeMadeAvailableBeforeItCanGoEnRoute(VehicleStatus from)
+    [Fact]
+    public void AVehicleInTheWorkshop_MustHaveItsMaintenanceRegisteredBeforeItCanGoEnRoute()
     {
-        var context = ContextIn(from);
+        var context = ContextIn(VehicleStatus.Maintenance);
+
+        Assert.Throws<InvalidVehicleTransitionException>(() => context.ChangeTo(VehicleStatus.EnRoute));
+        Assert.Throws<InvalidVehicleTransitionException>(() => context.ChangeTo(VehicleStatus.Available));   // ni siquiera a Disponible a mano
+
+        context.CompleteMaintenance();                                                                      // registrar el mantenimiento lo deja Disponible
+        Assert.Equal(VehicleStatus.Available, context.Status);
+
+        context.ChangeTo(VehicleStatus.EnRoute);
+        Assert.Equal(VehicleStatus.EnRoute, context.Status);
+    }
+
+    [Fact]
+    public void AVehicleOutOfService_MustBeMadeAvailableBeforeItCanGoEnRoute()
+    {
+        var context = ContextIn(VehicleStatus.OutOfService);
 
         Assert.Throws<InvalidVehicleTransitionException>(() => context.ChangeTo(VehicleStatus.EnRoute));
 
         context.ChangeTo(VehicleStatus.Available);
         context.ChangeTo(VehicleStatus.EnRoute);
         Assert.Equal(VehicleStatus.EnRoute, context.Status);
+    }
+
+    [Fact]
+    public void AManualMaintenanceToAvailable_IsRejected_AndSaysThatTheMaintenanceMustBeRegistered()
+    {
+        var context = ContextIn(VehicleStatus.Maintenance);
+
+        var error = Assert.Throws<InvalidVehicleTransitionException>(() => context.ChangeTo(VehicleStatus.Available));
+
+        Assert.Equal(VehicleStatus.Maintenance, context.Vehicle.Status);   // el rechazo no toca al vehículo
+        Assert.Equal(new[] { VehicleStatus.OutOfService }, error.AllowedTargets.ToArray());
+        Assert.Equal("Para dejarlo Disponible, registre el mantenimiento del vehículo.", error.Hint);
+        Assert.Equal(
+            "Transición de estado no permitida: el vehículo TST-001 está en Maintenance y no puede pasar a Available. " +
+            "Desde Maintenance solo puede pasar a: OutOfService. Para dejarlo Disponible, registre el mantenimiento del vehículo.",
+            error.Message);
+    }
+
+    [Fact]
+    public void RegisteringTheMaintenance_IsTheOnlyWayOutOfTheWorkshopToAvailable()
+    {
+        var byHand = ContextIn(VehicleStatus.Maintenance);
+        var byRecord = ContextIn(VehicleStatus.Maintenance);
+
+        Assert.Throws<InvalidVehicleTransitionException>(() => byHand.ChangeTo(VehicleStatus.Available));
+        byRecord.CompleteMaintenance();
+
+        Assert.Equal(VehicleStatus.Maintenance, byHand.Status);
+        Assert.Equal(VehicleStatus.Available, byRecord.Status);
     }
 
     [Fact]
@@ -233,10 +275,24 @@ public class VehicleStateBehaviorTests
         Assert.Equal(Plate, error.LicensePlate);
         Assert.Equal(VehicleStatus.Maintenance, error.From);
         Assert.Equal(VehicleStatus.EnRoute, error.To);
-        Assert.Equal(new[] { VehicleStatus.Available, VehicleStatus.OutOfService }, error.AllowedTargets.ToArray());
+        Assert.Equal(new[] { VehicleStatus.OutOfService }, error.AllowedTargets.ToArray());
         Assert.Equal(
             "Transición de estado no permitida: el vehículo TST-001 está en Maintenance y no puede pasar a EnRoute. " +
-            "Desde Maintenance solo puede pasar a: Available, OutOfService.",
+            "Desde Maintenance solo puede pasar a: OutOfService. Para dejarlo Disponible, registre el mantenimiento del vehículo.",
+            error.Message);
+    }
+
+    [Fact]
+    public void ARejectedTransitionFromAStateWithoutAnotherWay_AddsNoHint()
+    {
+        var context = ContextIn(VehicleStatus.OutOfService);
+
+        var error = Assert.Throws<InvalidVehicleTransitionException>(() => context.ChangeTo(VehicleStatus.EnRoute));
+
+        Assert.Null(error.Hint);
+        Assert.Equal(
+            "Transición de estado no permitida: el vehículo TST-001 está en OutOfService y no puede pasar a EnRoute. " +
+            "Desde OutOfService solo puede pasar a: Available, Maintenance.",
             error.Message);
     }
 

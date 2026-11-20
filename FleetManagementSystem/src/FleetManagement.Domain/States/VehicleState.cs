@@ -29,6 +29,12 @@ public abstract class VehicleState : IVehicleState
     protected abstract IReadOnlyList<VehicleStatus> ManualTargets { get; }
 
     /// <summary>
+    /// Qué decirle a quien pidió un cambio que este estado no permite, cuando existe otro camino para llegar ahí (p. ej. Maintenance
+    /// solo sale a Available al registrarse su mantenimiento). Por defecto no hay nada que añadir al mensaje.
+    /// </summary>
+    protected virtual string? RejectionHint(VehicleStatus target) => null;
+
+    /// <summary>
     /// Regla 1 del Mediator, que no distingue estados: el viaje que se pone en marcha deja al vehículo En ruta. Es una regla
     /// existente (la fija la prueba <c>MarkEnRoute_IsUnconditional...</c>); no se endurece aquí porque quien decide si un vehículo
     /// puede salir a una ruta son las reglas de asignación, que se ejecutan antes de llegar al Mediator.
@@ -59,7 +65,7 @@ public abstract class VehicleState : IVehicleState
             return;
 
         if (!ManualTargets.Contains(target))
-            throw new InvalidVehicleTransitionException(context.Vehicle.LicensePlate, Status, target, ManualTargets);
+            throw new InvalidVehicleTransitionException(context.Vehicle.LicensePlate, Status, target, ManualTargets, RejectionHint(target));
 
         context.TransitionTo(target);
     }

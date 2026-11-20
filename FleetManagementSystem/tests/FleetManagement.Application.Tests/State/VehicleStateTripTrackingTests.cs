@@ -74,7 +74,7 @@ public class VehicleStateTripTrackingTests
         await rig.AdvanceAsync(SixMinutes);
         Assert.Equal(movedBefore, rig.Vehicles.Updates.Count);        // mientras esté allí no se mueve
 
-        context.ChangeTo(VehicleStatus.Available);                    // por Disponible: el estado no deja pasar de Mantenimiento a En ruta
+        context.CompleteMaintenance();                                // se registra su mantenimiento: sale del taller (a mano no puede pasar a Disponible)
         context.ChangeTo(VehicleStatus.EnRoute);
         await rig.AdvanceAsync(SixMinutes);
         Assert.Equal(movedBefore + 1, rig.Vehicles.Updates.Count);    // vuelve a seguir su viaje

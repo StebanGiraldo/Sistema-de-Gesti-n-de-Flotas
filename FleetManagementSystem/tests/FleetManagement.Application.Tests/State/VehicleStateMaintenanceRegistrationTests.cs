@@ -77,16 +77,17 @@ public class VehicleStateMaintenanceRegistrationTests
     }
 
     [Fact]
-    public void ReleasingFromTheWorkshop_IsATransitionTheManualTableAlsoAllows()
+    public void ReleasingFromTheWorkshop_IsOnlyPossibleByRegisteringTheMaintenance_NotByHand()
     {
-        // Las dos formas de sacar un vehículo del taller (a mano y al registrar un mantenimiento) llevan al mismo estado.
+        // Un vehículo en el taller no pasa a Disponible a mano: solo sale de él cuando se registra su mantenimiento.
         var byHand = new Vehicle { LicensePlate = Plate, Status = VehicleStatus.Maintenance };
         var byRecord = new Vehicle { LicensePlate = Plate, Status = VehicleStatus.Maintenance };
 
-        new VehicleStateContext(byHand).ChangeTo(VehicleStatus.Available);
+        Assert.Throws<InvalidVehicleTransitionException>(() => new VehicleStateContext(byHand).ChangeTo(VehicleStatus.Available));
         new VehicleStateContext(byRecord).CompleteMaintenance();
 
-        Assert.Equal(byHand.Status, byRecord.Status);
+        Assert.Equal(VehicleStatus.Maintenance, byHand.Status);
+        Assert.Equal(VehicleStatus.Available, byRecord.Status);
     }
 
     // ---------------- El servicio real hace lo mismo que antes con cada estado inicial ----------------
@@ -205,6 +206,21 @@ public class VehicleStateMaintenanceRegistrationTests
 
         await fleet.Vehicles.UpdateVehicleStatusAsync(car.Id, new UpdateVehicleStatusRequest("EnRoute"));   // y ya puede volver a ruta
         Assert.Equal(VehicleStatus.EnRoute, car.Status);
+    }
+
+    [Fact]
+    public async Task AVehicleInTheWorkshop_CannotBeMadeAvailableByHand_ItIsOnlyFreedByItsRegisteredMaintenance()
+    {
+        var fleet = new RealFleet();
+        var car = (await fleet.SeedAsync())["CAR-003"];                          // en Mantenimiento
+
+        var error = await Assert.ThrowsAsync<InvalidVehicleTransitionException>(
+            () => fleet.Vehicles.UpdateVehicleStatusAsync(car.Id, new UpdateVehicleStatusRequest("Available")));
+        Assert.Contains("registre el mantenimiento", error.Message);
+        Assert.Equal(VehicleStatus.Maintenance, car.Status);                     // a mano no sale del taller
+
+        await fleet.Maintenance.CreateAsync(Request(car.Id));
+        Assert.Equal(VehicleStatus.Available, car.Status);                       // al registrar su mantenimiento, sí
     }
 
     [Fact]

@@ -45,8 +45,7 @@ public class VehicleServiceStateTransitionTests
     [InlineData(VehicleStatus.EnRoute,      VehicleStatus.Available)]
     [InlineData(VehicleStatus.EnRoute,      VehicleStatus.Maintenance)]
     [InlineData(VehicleStatus.EnRoute,      VehicleStatus.OutOfService)]
-    [InlineData(VehicleStatus.Maintenance,  VehicleStatus.Available)]
-    [InlineData(VehicleStatus.Maintenance,  VehicleStatus.OutOfService)]
+    [InlineData(VehicleStatus.Maintenance,  VehicleStatus.OutOfService)]   // a Disponible NO: del taller solo se sale registrando el mantenimiento
     [InlineData(VehicleStatus.OutOfService, VehicleStatus.Available)]
     [InlineData(VehicleStatus.OutOfService, VehicleStatus.Maintenance)]
     // Pedir el estado en el que ya está nunca fue un error: se guarda, se audita y se notifica igual que antes.
@@ -125,21 +124,56 @@ public class VehicleServiceStateTransitionTests
         Assert.Contains(Plate, error.Message);
         Assert.Contains("Maintenance", error.Message);
         Assert.Contains("EnRoute", error.Message);
-        Assert.Contains("Available, OutOfService", error.Message);
+        Assert.Contains("solo puede pasar a: OutOfService", error.Message);
+        Assert.Contains("registre el mantenimiento", error.Message);
+    }
+
+    [Theory]
+    [InlineData("Available")]
+    [InlineData("available")]
+    public async Task AVehicleInTheWorkshop_CannotBeMadeAvailableByHand(string status)
+    {
+        var vehicle = await VehicleAsync(VehicleStatus.Maintenance);
+
+        var error = await Assert.ThrowsAsync<InvalidVehicleTransitionException>(
+            () => Service().UpdateVehicleStatusAsync(vehicle.Id, new UpdateVehicleStatusRequest(status)));
+
+        Assert.Equal(VehicleStatus.Maintenance, error.From);
+        Assert.Equal(VehicleStatus.Available, error.To);
+        Assert.Contains("registre el mantenimiento del vehículo", error.Message);
+        Assert.Equal(VehicleStatus.Maintenance, await StoredStatusAsync(vehicle));   // sigue en el taller
+        Assert.Empty(_audit.Entries);                                                // el rechazo no deja rastro
+        Assert.Empty(_channel.SentMessages);                                         // ni avisa a nadie
     }
 
     [Fact]
-    public async Task TheWayBackToTheRoad_IsThroughAvailable()
+    public async Task TheWayBackToTheRoad_IsRegisteringTheMaintenance_AndThenSendingTheVehicleEnRoute()
     {
         var vehicle = await VehicleAsync(VehicleStatus.Maintenance);
         var service = Service();
+        var maintenance = new MaintenanceService(new InMemoryMaintenanceRepository(), _vehicles, _drivers, _audit, _channel);
 
         await Assert.ThrowsAsync<InvalidVehicleTransitionException>(() => service.UpdateVehicleStatusAsync(vehicle.Id, new UpdateVehicleStatusRequest("EnRoute")));
-        await service.UpdateVehicleStatusAsync(vehicle.Id, new UpdateVehicleStatusRequest("Available"));
+        await Assert.ThrowsAsync<InvalidVehicleTransitionException>(() => service.UpdateVehicleStatusAsync(vehicle.Id, new UpdateVehicleStatusRequest("Available")));
+        Assert.Equal(VehicleStatus.Maintenance, await StoredStatusAsync(vehicle));
+
+        await maintenance.CreateAsync(new CreateMaintenanceRecordRequest(vehicle.Id, "OilChange", new DateTime(2026, 3, 1, 8, 0, 0, DateTimeKind.Utc), null, 60000, "Cambio de aceite", 50000));
+        Assert.Equal(VehicleStatus.Available, await StoredStatusAsync(vehicle));   // lo dejó Disponible el registro del mantenimiento
+
         await service.UpdateVehicleStatusAsync(vehicle.Id, new UpdateVehicleStatusRequest("EnRoute"));
 
         Assert.Equal(VehicleStatus.EnRoute, await StoredStatusAsync(vehicle));
-        Assert.Equal(2, VehicleAudit().Count());   // solo los dos cambios que se hicieron; el rechazado no dejó rastro
+        Assert.Single(VehicleAudit());   // solo el cambio manual a EnRoute; ni los rechazos ni la salida del taller son un cambio manual
+    }
+
+    [Fact]
+    public async Task AVehicleInTheWorkshop_CanStillBeTakenOutOfService_ByHand()
+    {
+        var vehicle = await VehicleAsync(VehicleStatus.Maintenance);
+
+        await Service().UpdateVehicleStatusAsync(vehicle.Id, new UpdateVehicleStatusRequest("OutOfService"));
+
+        Assert.Equal(VehicleStatus.OutOfService, await StoredStatusAsync(vehicle));
     }
 
     [Fact]

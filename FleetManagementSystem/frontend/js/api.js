@@ -102,6 +102,9 @@ const FleetAPI = {
   // --- Navegación externa ---
   getNavigationLink: (routeId) => apiFetch(`/navigation/route/${routeId}`),
 
+  // --- Hoja de ruta por audiencia (Template Method): Driver o Dispatcher ---
+  getRouteSheet: (routeId, audience) => apiFetch(`/route-sheets/${routeId}?audience=${encodeURIComponent(audience)}`),
+
   // --- Auditoría (Singleton) ---
   getAuditLogs: (count = 100) => apiFetch(`/audit/logs?count=${count}`),
 };

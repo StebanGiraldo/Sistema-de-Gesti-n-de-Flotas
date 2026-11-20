@@ -356,14 +356,14 @@ function drawPlanMap(plan) {
     L.polyline(path, { color, weight: 4, opacity: 0.85 }).addTo(planMap);
     trip.stops.forEach((stop, order) => {
       L.marker([stop.latitude, stop.longitude], { icon: numberedIcon(order + 1, color) })
-        .addTo(planMap).bindTooltip(`${trip.licensePlate} · ${order + 1}. ${stop.description}`);
+        .addTo(planMap).bindTooltip(escapeHtml(`${trip.licensePlate} · ${order + 1}. ${stop.description}`));
       points.push([stop.latitude, stop.longitude]);
     });
   });
 
   plan.unassigned.forEach(({ delivery }) => {
     L.marker([delivery.latitude, delivery.longitude], { icon: numberedIcon('✕', CURRENT_COLOR) })
-      .addTo(planMap).bindTooltip(`Sin asignar: ${delivery.description}`);
+      .addTo(planMap).bindTooltip(escapeHtml(`Sin asignar: ${delivery.description}`));
     points.push([delivery.latitude, delivery.longitude]);
   });
   fitPlanMap(points);
@@ -450,7 +450,7 @@ function drawOptimizeMap(route, result) {
   L.polyline(pathOf(result.proposed), { color: OPTIMIZED_COLOR, weight: 4, opacity: 0.9 }).addTo(planMap);
 
   result.proposed.waypoints.forEach((w, i) => {
-    L.marker([w.latitude, w.longitude], { icon: numberedIcon(i + 1, OPTIMIZED_COLOR) }).addTo(planMap).bindTooltip(`${i + 1}. ${w.label}`);
+    L.marker([w.latitude, w.longitude], { icon: numberedIcon(i + 1, OPTIMIZED_COLOR) }).addTo(planMap).bindTooltip(escapeHtml(`${i + 1}. ${w.label}`));
   });
   // En un recorrido de ida y vuelta (mismo origen y destino) un solo marcador: dos encima se taparían.
   const roundTrip = Math.abs(origin[0] - destination[0]) < 1e-6 && Math.abs(origin[1] - destination[1]) < 1e-6;
