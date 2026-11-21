@@ -22,7 +22,10 @@ let myRoutes = [];
 const PROGRESS_POLL_MS = 5000;
 const ROUTE_POLL_MS = 15000;
 let vehicleMarker = null;
+// Recorrido por carretera de la ruta que se está mostrando (null mientras se calcula o si el servicio no responde).
+let roadTrip = null; // { legs, stops }
 let tripWasActive = false;
+let lastTrip = null; // último avance recibido: permite recolocar el vehículo cuando llega el trazado por carretera
 
 // El ícono no depende de nada que cambie: se crea una sola vez y se reutiliza (reusa los estilos del marcador del panel).
 const VEHICLE_ICON = L.divIcon({
@@ -163,12 +166,29 @@ function renderMap(route) {
 
   const stops = routeStops(route);
   const points = stops.map(s => [s.latitude, s.longitude]);
-  routeLayer = TripRouteLayer.build(stops, route.status).addTo(map);
+  const layer = TripRouteLayer.build(stops, route.status).addTo(map);
+  routeLayer = layer;
+  roadTrip = null;
+  showRoadRoute(layer, stops);
 
   setTimeout(() => {
     map.invalidateSize();
     map.fitBounds(points, { padding: [24, 24] });
   }, 60);
+}
+
+// Pide el trazado por carretera y, si llega y la ruta mostrada sigue siendo la misma, lo dibuja y apoya el vehículo sobre él.
+async function showRoadRoute(layer, stops) {
+  try {
+    const legs = await RoadRoutes.legs(stops);
+    if (routeLayer !== layer) return;
+    if (!RoadRoutes.replaceStraightLine(layer, legs)) return;
+    roadTrip = { legs, stops };
+    if (lastTrip) moveVehicleMarker(lastTrip);
+  } catch (err) {
+    // El trazado por carretera es un extra: si algo falla, el mapa se queda con la línea recta que ya se dibujó.
+    console.warn('No se pudo mostrar la ruta por carretera:', err.message);
+  }
 }
 
 function renderOtherRoutes(active) {
@@ -212,7 +232,10 @@ function renderTripProgress(trip) {
 }
 
 function moveVehicleMarker(trip) {
-  const position = [trip.latitude, trip.longitude];
+  lastTrip = trip;
+  // Con el trazado por carretera disponible, el vehículo va sobre la vía; si no, donde dice el servidor (tramo recto).
+  const onRoad = roadTrip ? RoadRoutes.pointAt(roadTrip.legs, roadTrip.stops, trip.percent) : null;
+  const position = onRoad || [trip.latitude, trip.longitude];
   if (vehicleMarker) {
     MarkerMotion.glide(vehicleMarker, position, PROGRESS_POLL_MS);
     return;
@@ -223,6 +246,7 @@ function moveVehicleMarker(trip) {
 }
 
 function removeVehicleMarker() {
+  lastTrip = null;
   if (!vehicleMarker) return;
   map.removeLayer(vehicleMarker);
   vehicleMarker = null;

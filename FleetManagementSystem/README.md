@@ -52,6 +52,9 @@ Operador), un dashboard administrativo y un portal para conductores.
 11. [Limitaciones conocidas del prototipo](#11-limitaciones-conocidas-del-prototipo)
 12. [Pruebas automatizadas y cómo demostrar el Factory Method](#12-pruebas-automatizadas-y-cómo-demostrar-el-factory-method)
 
+> **Evidencia de objetivos.** [`docs/CUMPLIMIENTO_OBJETIVOS.md`](docs/CUMPLIMIENTO_OBJETIVOS.md) relaciona cada objetivo específico con los patrones que lo cumplen,
+> describe los datos de demostración ampliados (12 operadores, 35 vehículos, 24 rutas con carga) y trae 12 ejemplos reproducibles.
+
 ---
 
 ## 1. Descripción general y módulos funcionales
@@ -146,7 +149,7 @@ FleetManagementSystem/
 │   │   ├── Facades/    ← FACADE del resumen del dashboard (sección 8.8)
 │   │   ├── Metrics/    ← FleetMetrics: cálculos que comparten el reporte y el resumen
 │   │   ├── Geo/        ← GeoMath (Haversine, interpolación), TripEstimate (minutos = km / velocidad) y VehicleSpeed: compartidos por rutas, simulación y plan de reparto
-│   │   ├── Assignment/ ← reglas de asignación (capacidad, disponibilidad, doble asignación) y el DECORATOR que las aplica (sección 8.12)
+│   │   ├── Assignment/ ← reglas de asignación (capacidad, disponibilidad, doble asignación), el DECORATOR que las aplica (sección 8.12) y RouteAssignmentService (asignar conductor/vehículo a una ruta ya creada)
 │   │   ├── Optimization/ ← STRATEGY: orden de las paradas, reparto de entregas y secuencia de cada viaje (sección 8.11)
 │   │   ├── Commands/   ← COMMAND: órdenes que se pueden deshacer y rehacer, su invocador y el historial por usuario (sección 8.13); y el MEMENTO del orden de las paradas (sección 8.17)
 │   │   ├── Mediators/  ← MEDIATOR: coordina el estado de la ruta con el de su vehículo (sección 8.16)
@@ -160,6 +163,7 @@ FleetManagementSystem/
 │   ├── FleetManagement.Infrastructure/
 │   │   ├── Logging/FleetAuditLogger.cs  ← SINGLETON
 │   │   ├── Persistence/ (6 repositorios en memoria + InMemoryDataSeeder + FleetDbContext)
+│   │   │   └── Demo/ (ampliación de los datos de demostración: operadores, vehículos, rutas con carga y mantenimiento)
 │   │   ├── Security/ (PasswordHasher, InMemorySessionTokenStore)
 │   │   ├── Navigation/ ← GoogleMapsAdapter (Adapter) + CachingNavigationProviderProxy y su caché (PROXY, sección 8.10)
 │   │   ├── Simulation/ (InMemoryTripProgressTracker: avance de los viajes, en memoria)
@@ -219,6 +223,8 @@ Al iniciar, la aplicación:
 1. Registra todas las dependencias (ver `Program.cs`).
 2. Carga datos de demostración (`InMemoryDataSeeder`) con usuarios, vehículos, rutas
    y mantenimientos de ejemplo, usando coordenadas de Santander y otras ciudades de Colombia.
+   Una ampliación (`Persistence/Demo`) suma **12 cuentas de operador**, **35 vehículos** y **24 rutas con carga**
+   (11 viajes en curso, 7 planificados y 6 completados); el detalle está en [`docs/CUMPLIMIENTO_OBJETIVOS.md`](docs/CUMPLIMIENTO_OBJETIVOS.md).
 3. Expone Swagger en **http://localhost:5080/swagger** para explorar y probar cada endpoint.
 4. Inicia el `VehicleSimulationBackgroundService`, que cada segundo avanza los vehículos
    "En ruta" a lo largo de su ruta asignada (origen → paradas → destino) para simular el
@@ -298,6 +304,7 @@ dotnet run --project src/FleetManagement.Api
 | Administrador | `admin` | `Admin123!` | `dashboard.html` |
 | Operador (conductor) | `operador1` | `Operador123!` | `operator.html` (tiene una ruta activa asignada) |
 | Operador (conductor) | `operador2` | `Operador123!` | `operator.html` (tiene una ruta planificada) |
+| Operadores (conductores) | `operador3` … `operador12` | `Operador123!` | `operator.html` (cada uno con su viaje activo y/o su siguiente viaje; ver [`docs/CUMPLIMIENTO_OBJETIVOS.md`](docs/CUMPLIMIENTO_OBJETIVOS.md), sección 4) |
 
 Las contraseñas se almacenan con hashing **PBKDF2** (`Rfc2898DeriveBytes`, 100.000
 iteraciones, sal aleatoria por usuario) — ver `Infrastructure/Security/PasswordHasher.cs`.
@@ -3585,6 +3592,8 @@ correr el backend. Resumen de endpoints:
 | POST | `/api/routes/express` | Crea una ruta express (Builder + Director). Mismas reglas de asignación que `POST /api/routes` | Admin |
 | POST | `/api/routes/{id}/duplicate` | Duplica una ruta (Prototype) | Admin |
 | PATCH | `/api/routes/{id}/status` | Cambia el estado de una ruta. Al iniciarla (`InProgress`/`Delayed`) responde 400 si el vehículo o el conductor ya están en otro viaje activo o el vehículo no está operativo. Después de guardar el estado, el vehículo asignado se ajusta (queda En ruta, o Disponible al terminar si no sigue en otro viaje; Mediator, [8.16](#816-mediator--coordinar-el-estado-de-la-ruta-con-el-del-vehículo)) | — |
+| GET | `/api/routes/{id}/assignment-options` | Conductores y vehículos que hoy se pueden asignar a esa ruta (conductor sin otro viaje activo; vehículo operativo, sin mantenimiento vencido, con capacidad para la carga y sin otro viaje activo). 404 si la ruta no existe | Admin |
+| PATCH | `/api/routes/{id}/assignment` | Asigna `{ "driverId", "vehicleId" }` (uno o ambos) a una ruta que no los tiene (p. ej. una duplicada). Solo completa lo que falta, no reemplaza; no admite rutas Completadas/Canceladas; aplica las reglas de asignación y responde 400 con **todas** las incumplidas. Si la ruta ya está en curso, el vehículo queda En ruta (Mediator). Recalcula el tiempo estimado con la velocidad del vehículo | Admin |
 | GET | `/api/routes/{id}/optimization` | Propone un mejor orden de las paradas **sin modificar la ruta**: lista actual y propuesta, kilómetros y minutos de cada una, ahorro (Strategy) | — |
 | POST | `/api/routes/{id}/optimization` | Aplica el orden propuesto (solo rutas planificadas; 400 si no lo está; si ya es el mejor, no cambia nada) | Admin |
 | POST | `/api/dispatch/plan` | Calcula, **sin guardar nada**, el reparto de una lista de entregas entre los vehículos disponibles: viajes con sus paradas en orden, carga, kilómetros y minutos; entregas sin asignar con su motivo; vehículos excluidos con su motivo; comparación con el reparto simple (Strategy) | Admin |
@@ -3717,6 +3726,25 @@ para mantenerlo simple, y quedan documentadas aquí para quien continúe el proy
 
 ## 11. Limitaciones conocidas del prototipo
 
+- **Carreteras reales: solo en la presentación del mapa.** El servidor calcula el avance, los kilómetros y la ETA de cada viaje sobre
+  tramos **rectos** entre sus paradas (`RoutePath`, distancia Haversine), y eso no cambió. El navegador (`frontend/js/roadroutes.js`)
+  pide a OSRM el trazado por carretera de cada tramo, dibuja la carretera en lugar de la recta y coloca el marcador del vehículo
+  en el punto de la vía que corresponde al mismo avance. Si el servicio no responde, el mapa queda como antes (línea recta).
+  Usa el servidor público de demostración de OSRM (`router.project-osrm.org`: sin garantía de servicio, uso ligero, y exige
+  internet en el navegador); en producción hay que apuntar `OSRM_URL` a un OSRM propio o a otro proveedor. Los km y la ETA que
+  muestran las tarjetas siguen siendo en línea recta; el kilometraje por carretera solo aparece al pasar el cursor sobre la línea.
+  Que el **servidor** recorra la carretera (y calcule km y ETA con ella) exigiría un `IRoadRouteProvider` detrás del Adapter de
+  navegación y cambiar `RoutePath`; no se hizo para no tocar la simulación ni los patrones existentes.
+- **Asignar conductor/vehículo a una ruta ya creada y retraso visible (revisión de lógica).** Botón «👤 Asignar» en «Rutas y cargas»
+  para las rutas sin conductor o sin vehículo (`PATCH /api/routes/{id}/assignment`, servicio nuevo `RouteAssignmentService` que
+  reutiliza `IRouteAssignmentValidator`, sin tocar `IDeliveryRouteService`). La columna «Retraso» muestra los minutos acumulados por
+  las alertas y la tabla se vuelve a leer sola cada 5 s mientras se mira esa pestaña. Correcciones: (1) una alerta de retraso ya no
+  reabre una ruta Completada o Cancelada (`TripAlertService`); (2) registrar un mantenimiento antiguo ya no hace retroceder
+  `LastMaintenanceDate` (`MaintenanceService`). **Quedan sin cambiar, a propósito** (una prueba existente los fija o es decisión de
+  negocio): se puede iniciar un viaje sin conductor ni vehículo (`Start_RouteWithoutVehicleOrDriver_IsAccepted`); no hay máquina de
+  estados de rutas (el estado de una ruta cerrada se puede volver a cambiar a mano por la API); cualquier mantenimiento registrado
+  saca al vehículo del taller aunque tenga otra tarea vencida; una alerta de retraso sobre una ruta Planificada la marca Retrasada
+  sin poner al vehículo En ruta (decisión documentada en `FleetLifecycleMediator`).
 - **Cómo se verificó y qué falta verificar.** El entorno donde se generó esta versión no tenía acceso a NuGet, así que
   **no se ejecutaron `dotnet restore` / `dotnet test` reales**. `Domain`, `Application`, `Infrastructure` (sin `FleetDbContext.cs`,
   que usa EF Core) y `Api` se compilaron con el SDK de .NET 8 y el framework compartido de ASP.NET Core, con sustitutos mínimos

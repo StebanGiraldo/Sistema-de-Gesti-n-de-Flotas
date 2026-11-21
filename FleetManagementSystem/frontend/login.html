@@ -64,6 +64,10 @@
     background: none; border: none; color: var(--color-accent);
     font-size: 11.5px; font-weight: 600; cursor: pointer; padding: 0;
   }
+  .demo-row select {
+    font-size: 11.5px; max-width: 110px; padding: 1px 2px;
+    background: var(--color-surface, transparent); color: var(--color-text); border: 1px solid var(--color-border-soft); border-radius: 4px;
+  }
 </style>
 </head>
 <body>
@@ -104,6 +108,15 @@
         <span><strong>Operador:</strong> operador1 / Operador123!</span>
         <button type="button" data-user="operador1" data-pass="Operador123!">Usar</button>
       </div>
+      <div class="demo-row">
+        <span><strong>Otros operadores:</strong> operador2 … operador12 / Operador123!</span>
+        <select id="demoOperator" aria-label="Elegir otro operador de demostración">
+          <option value="">Elegir…</option>
+          <option>operador2</option><option>operador3</option><option>operador4</option><option>operador5</option>
+          <option>operador6</option><option>operador7</option><option>operador8</option><option>operador9</option>
+          <option>operador10</option><option>operador11</option><option>operador12</option>
+        </select>
+      </div>
     </div>
   </div>
 </div>
@@ -116,6 +129,12 @@
       document.getElementById('username').value = btn.dataset.user;
       document.getElementById('password').value = btn.dataset.pass;
     });
+  });
+
+  document.getElementById('demoOperator').addEventListener('change', (e) => {
+    if (!e.target.value) return;
+    document.getElementById('username').value = e.target.value;
+    document.getElementById('password').value = 'Operador123!';
   });
 
   const form = document.getElementById('loginForm');

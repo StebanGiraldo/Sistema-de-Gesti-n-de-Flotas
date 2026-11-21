@@ -162,6 +162,9 @@ builder.Services.AddScoped<IDriverService, DriverService>();
 // DECORATOR: las reglas de asignación (capacidad, disponibilidad, doble asignación) se comprueban ANTES de delegar en
 // el servicio real de rutas. Todo el que pida IDeliveryRouteService (controladores, simulador) recibe la versión protegida.
 builder.Services.AddScoped<IRouteAssignmentValidator, RouteAssignmentValidator>();
+// Asignar conductor/vehículo a una ruta ya creada (p. ej. una duplicada, que nace sin asignar). Reutiliza el mismo validador;
+// vive en su propia interfaz para no cambiar el contrato de IDeliveryRouteService.
+builder.Services.AddScoped<IRouteAssignmentService, RouteAssignmentService>();
 // MEDIATOR (patrón de comportamiento): la coordinación entre el estado de una ruta y el de su vehículo ya no está repartida
 // entre los servicios. El participante de rutas avisa al mediador y éste dirige al participante de vehículos (ver
 // Application/Mediators). No guardan estado, así que se registran por petición (Scoped) como los servicios que los usan.

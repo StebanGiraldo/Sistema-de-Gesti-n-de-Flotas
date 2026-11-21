@@ -2,6 +2,7 @@ using FleetManagement.Application.Interfaces;
 using FleetManagement.Application.Interfaces.Repositories;
 using FleetManagement.Domain.Entities;
 using FleetManagement.Domain.Enums;
+using FleetManagement.Infrastructure.Persistence.Demo;
 using Microsoft.Extensions.DependencyInjection;
 using NetTopologySuite.Geometries;
 
@@ -122,5 +123,8 @@ public static class InMemoryDataSeeder
         route2.Waypoints.Add(new Waypoint { Order = 0, Label = "Tunja (parada técnica)", Location = new Point(-73.3567, 5.5353) { SRID = 4326 } });
         route2.CargoItems.Add(new CargoItem { Description = "Documentación legal", WeightKg = 5, VolumeM3 = 0.05, Priority = CargoPriority.Standard });
         await routeRepo.AddAsync(route2);
+
+        // --- Flota ampliada: más operadores, más vehículos para asignar y más rutas con carga (ver carpeta Demo) ---
+        await DemoFleetSeeder.SeedAsync(services);
     }
 }

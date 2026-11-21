@@ -679,3 +679,31 @@ table.data-table {
   .dispatch-add-row { grid-template-columns: 1fr 1fr; }
   .plan-compare-lists { grid-template-columns: 1fr; }
 }
+
+/* ---------------------------------------------------------------------
+   Mapas de Leaflet bajo los modales
+   Leaflet da a sus capas y controles z-index de hasta 1000. Sin un contexto de apilamiento propio, esas capas competían con
+   el resto de la página y quedaban POR ENCIMA de los modales (z-index 100): el mapa tapaba el formulario. Con `isolation`
+   cada mapa es un bloque cerrado cuyo z-index interno ya no sale de su contenedor.
+   --------------------------------------------------------------------- */
+.leaflet-container,
+.map-container,
+.operator-map {
+  z-index: 0;        /* Leaflet ya deja el contenedor posicionado, así que este z-index sí cuenta */
+  isolation: isolate;
+}
+
+/* Tabla de rutas: lo que falta por asignar y el retraso acumulado */
+.data-table .unassigned { color: var(--status-maintenance); font-size: 12px; font-weight: 600; }
+.data-table .delay-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 100px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--status-maintenance);
+  background: var(--status-maintenance-soft);
+  white-space: nowrap;
+}
+/* Los botones de acción de cada ruta pasan a otra línea en vez de salirse de la tabla */
+#routesTableBody td:last-child .flex { flex-wrap: wrap; }

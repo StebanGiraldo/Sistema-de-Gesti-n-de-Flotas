@@ -33,6 +33,7 @@ let pollTimer = null;
 let progressCache = [];
 let tripByVehicleId = new Map();
 const tripRouteLayers = new Map(); // routeId -> { signature, layer }
+const roadTrips = new Map(); // routeId -> { signature, legs, stops }: trazado por carretera de cada viaje activo
 
 // Cada cuánto se vuelve a consultar la API. También es la duración del deslizamiento de los marcadores: si se mueven
 // durante todo el intervalo, el movimiento es continuo y no a saltos.
@@ -254,21 +255,48 @@ function renderTripRoutes() {
     if (drawn && drawn.signature === signature) return;
 
     if (drawn) map.removeLayer(drawn.layer);
-    tripRouteLayers.set(trip.routeId, { signature, layer: TripRouteLayer.build(trip.stops, trip.routeStatus).addTo(map) });
+    roadTrips.delete(trip.routeId);
+    const layer = TripRouteLayer.build(trip.stops, trip.routeStatus).addTo(map);
+    tripRouteLayers.set(trip.routeId, { signature, layer });
+    showRoadRoute(trip, signature, layer);
   });
 
   tripRouteLayers.forEach((drawn, routeId) => {
     if (activeRouteIds.has(routeId)) return;
     map.removeLayer(drawn.layer);
     tripRouteLayers.delete(routeId);
+    roadTrips.delete(routeId);
   });
+}
+
+// Pide el trazado por carretera de un viaje; si llega y el viaje se sigue dibujando igual, lo dibuja y recoloca el vehículo.
+async function showRoadRoute(trip, signature, layer) {
+  try {
+    const legs = await RoadRoutes.legs(trip.stops);
+    const drawn = tripRouteLayers.get(trip.routeId);
+    if (!drawn || drawn.layer !== layer) return;
+    if (!RoadRoutes.replaceStraightLine(layer, legs)) return;
+    roadTrips.set(trip.routeId, { signature, legs, stops: trip.stops });
+    renderMarkers();
+  } catch (err) {
+    // El trazado por carretera es un extra: si algo falla, el mapa se queda con la línea recta que ya se dibujó.
+    console.warn('No se pudo mostrar la ruta por carretera:', err.message);
+  }
+}
+
+// Posición del vehículo: sobre la carretera si ya se conoce el trazado de su viaje; si no, la que informa el servidor.
+function vehiclePosition(vehicle) {
+  const trip = tripByVehicleId.get(vehicle.id);
+  const road = trip && roadTrips.get(trip.routeId);
+  const onRoad = road ? RoadRoutes.pointAt(road.legs, road.stops, trip.percent) : null;
+  return onRoad || [vehicle.latitude, vehicle.longitude];
 }
 
 function renderMarkers() {
   const seen = new Set();
   vehiclesCache.forEach(v => {
     seen.add(v.id);
-    const latlng = [v.latitude, v.longitude];
+    const latlng = vehiclePosition(v);
     const icon = vehicleDivIcon(v);
     const marker = markers[v.id];
     if (marker) {
@@ -416,13 +444,24 @@ function openCloneVehicleModal(templateId) {
 // ---------------------------------------------------------------------
 // Rutas (Builder + Prototype + Director)
 // ---------------------------------------------------------------------
-async function refreshRoutes() {
+async function refreshRoutes(silent = false) {
   try {
     routesCache = await FleetAPI.getRoutes();
     renderRoutesTable();
   } catch (err) {
-    showToast(err.message, 'error');
+    if (!silent) showToast(err.message, 'error');
   }
+}
+
+// La tabla se vuelve a leer sola mientras se mira la pestaña de rutas, para que un retraso que reporta un operador aparezca
+// sin tener que salir y volver a entrar. No se redibuja si hay una ventana abierta o se está eligiendo un estado en la tabla.
+function refreshRoutesIfVisible() {
+  const panel = document.getElementById('tab-routes');
+  if (!panel || !panel.classList.contains('active')) return;
+  if (document.getElementById('activeModalOverlay')) return;
+  const focused = document.activeElement;
+  if (focused && focused.closest && focused.closest('#routesTableBody') && focused.tagName === 'SELECT') return;
+  refreshRoutes(true);
 }
 
 function renderRoutesTable() {
@@ -434,8 +473,8 @@ function renderRoutesTable() {
   tbody.innerHTML = routesCache.map(r => `
     <tr>
       <td>${escapeHtml(r.name)}</td>
-      <td class="cell-muted">${r.assignedVehiclePlate ? escapeHtml(r.assignedVehiclePlate) : '—'}</td>
-      <td class="cell-muted">${r.assignedDriverName ? escapeHtml(r.assignedDriverName) : '—'}</td>
+      <td class="cell-muted">${r.assignedVehiclePlate ? escapeHtml(r.assignedVehiclePlate) : '<span class="unassigned">Sin asignar</span>'}</td>
+      <td class="cell-muted">${r.assignedDriverName ? escapeHtml(r.assignedDriverName) : '<span class="unassigned">Sin asignar</span>'}</td>
       <td>
         <select class="route-status-select" data-id="${r.id}">
           ${Object.keys(ROUTE_STATUS_LABELS).map(s => `<option value="${s}" ${r.status === s ? 'selected' : ''}>${ROUTE_STATUS_LABELS[s]}</option>`).join('')}
@@ -443,9 +482,10 @@ function renderRoutesTable() {
       </td>
       <td class="cell-muted">${r.estimatedDistanceKm} km · ${Math.round(r.estimatedDurationMinutes)} min</td>
       <td class="cell-muted">${r.scheduledDate ? formatDate(r.scheduledDate) : '—'}</td>
-      <td class="cell-muted">${r.delayMinutes > 0 ? r.delayMinutes + ' min' : '—'}</td>
+      <td class="cell-muted">${delayCellHtml(r)}</td>
       <td>
         <div class="flex gap-8">
+          ${canAssignRoute(r) ? `<button class="btn btn-secondary btn-sm assign-route-btn" data-id="${r.id}" title="Asignar el conductor o el vehículo que le faltan">👤 Asignar</button>` : ''}
           ${canOptimizeRoute(r) ? `<button class="btn btn-ghost btn-sm optimize-route-btn" data-id="${r.id}" title="Buscar el mejor orden de las paradas">🧭 Optimizar</button>` : ''}
           <button class="btn btn-ghost btn-sm duplicate-route-btn" data-id="${r.id}" title="Duplicar ruta (Prototype)">⧉ Duplicar</button>
         </div>
@@ -453,6 +493,7 @@ function renderRoutesTable() {
     </tr>
   `).join('');
 
+  tbody.querySelectorAll('.assign-route-btn').forEach(btn => btn.addEventListener('click', () => openAssignRouteModal(btn.dataset.id)));
   tbody.querySelectorAll('.optimize-route-btn').forEach(btn => btn.addEventListener('click', () => openRouteOptimizeModal(btn.dataset.id)));
   tbody.querySelectorAll('.duplicate-route-btn').forEach(btn => btn.addEventListener('click', () => duplicateRoute(btn.dataset.id)));
   tbody.querySelectorAll('.route-status-select').forEach(sel => {
@@ -467,6 +508,75 @@ function renderRoutesTable() {
         await refreshRoutes(); // el select vuelve al estado real de la ruta: la API rechazó el cambio
       }
     });
+  });
+}
+
+// Minutos de retraso acumulados de la ruta (los que suman las alertas de retraso de los operadores).
+function delayCellHtml(route) {
+  if (!(route.delayMinutes > 0)) return '—';
+  return `<span class="delay-badge" title="Retraso acumulado reportado en alertas">⏱ +${route.delayMinutes} min</span>`;
+}
+
+// Se puede asignar a una ruta que aún no terminó y a la que le falta conductor o vehículo.
+function canAssignRoute(route) {
+  return route.status !== 'Completed' && route.status !== 'Cancelled' && (!route.assignedDriverId || !route.assignedVehicleId);
+}
+
+async function openAssignRouteModal(routeId) {
+  const route = routesCache.find(r => r.id === routeId);
+  if (!route) return;
+
+  let options;
+  try {
+    options = await FleetAPI.getRouteAssignmentOptions(routeId);
+  } catch (err) {
+    showToast(err.message, 'error');
+    return;
+  }
+
+  const needsDriver = !route.assignedDriverId;
+  const needsVehicle = !route.assignedVehicleId;
+  const driverField = !needsDriver ? '' : `
+    <div class="field"><label>Conductor disponible</label>
+      <select name="driverId" required ${options.drivers.length === 0 ? 'disabled' : ''}>
+        ${options.drivers.length === 0 ? '<option value="">No hay conductores disponibles</option>'
+          : '<option value="">Elegir conductor…</option>' + options.drivers.map(d => `<option value="${d.id}">${escapeHtml(d.fullName)} · ${escapeHtml(d.licenseNumber)}</option>`).join('')}
+      </select>
+    </div>`;
+  const vehicleField = !needsVehicle ? '' : `
+    <div class="field"><label>Vehículo disponible</label>
+      <select name="vehicleId" required ${options.vehicles.length === 0 ? 'disabled' : ''}>
+        ${options.vehicles.length === 0 ? '<option value="">No hay vehículos que cumplan las reglas</option>'
+          : '<option value="">Elegir vehículo…</option>' + options.vehicles.map(v => `<option value="${v.id}">${escapeHtml(v.licensePlate)} · ${escapeHtml(VEHICLE_TYPE_LABELS[v.type] || v.type)} · ${v.capacityKg} kg</option>`).join('')}
+      </select>
+    </div>`;
+
+  openModal(`
+    <div class="modal-header"><h3>Asignar a la ruta</h3><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <form id="assignRouteForm">
+      <div class="modal-body">
+        <p class="text-sm text-muted"><strong>${escapeHtml(route.name)}</strong> — solo se ofrece lo que cumple las reglas: conductor sin otro viaje activo; vehículo operativo, sin mantenimiento vencido, con capacidad para la carga y sin otro viaje activo.</p>
+        <div class="mt-16">${driverField}${vehicleField}</div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-ghost" onclick="closeModal()">Cancelar</button>
+        <button type="submit" class="btn btn-primary">Asignar</button>
+      </div>
+    </form>
+  `);
+
+  document.getElementById('assignRouteForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    try {
+      await FleetAPI.assignRoute(routeId, { driverId: fd.get('driverId') || null, vehicleId: fd.get('vehicleId') || null });
+      closeModal();
+      showToast('Asignación guardada.', 'success');
+      await refreshRoutes();
+      await refreshVehicles(true);
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
   });
 }
 
@@ -897,5 +1007,5 @@ document.getElementById('refreshAuditBtn').addEventListener('click', refreshAudi
   try { driversCache = await FleetAPI.getDrivers(); } catch { /* se listará vacío si falla */ }
 
   // Monitoreo en tiempo real simulado: se vuelve a consultar la API periódicamente.
-  pollTimer = setInterval(() => refreshVehicles(true), POLL_INTERVAL_MS);
+  pollTimer = setInterval(() => { refreshVehicles(true); refreshRoutesIfVisible(); }, POLL_INTERVAL_MS);
 })();

@@ -67,6 +67,9 @@ const FleetAPI = {
   createExpressRoute: (data) => apiFetch('/routes/express', { method: 'POST', body: JSON.stringify(data) }),
   duplicateRoute: (id, newScheduledDate) => apiFetch(`/routes/${id}/duplicate`, { method: 'POST', body: JSON.stringify({ newScheduledDate }) }),
   updateRouteStatus: (id, status) => apiFetch(`/routes/${id}/status`, { method: 'PATCH', body: JSON.stringify({ status }) }),
+  // Asignar conductor y/o vehículo a una ruta que no los tiene: primero qué se puede elegir hoy, luego la asignación.
+  getRouteAssignmentOptions: (id) => apiFetch(`/routes/${id}/assignment-options`),
+  assignRoute: (id, data) => apiFetch(`/routes/${id}/assignment`, { method: 'PATCH', body: JSON.stringify(data) }),
 
   // --- Optimización de rutas y asignación de cargas (Strategy): proponer no guarda nada; aplicar sí ---
   getRouteOptimization: (id) => apiFetch(`/routes/${id}/optimization`),

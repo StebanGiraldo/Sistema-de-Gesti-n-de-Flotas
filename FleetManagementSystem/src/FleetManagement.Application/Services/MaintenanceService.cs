@@ -85,7 +85,9 @@ public class MaintenanceService : IMaintenanceService
         };
         var saved = await _maintenanceRepository.AddAsync(record);
 
-        vehicle.LastMaintenanceDate = request.PerformedAt;
+        // Registrar un mantenimiento antiguo (carga tardía de historial) no debe hacer retroceder la "última fecha de mantenimiento".
+        if (vehicle.LastMaintenanceDate is not { } lastDate || request.PerformedAt > lastDate)
+            vehicle.LastMaintenanceDate = request.PerformedAt;
         new VehicleStateContext(vehicle, _vehicleStates).CompleteMaintenance();   // un vehículo en el taller sale de él; los demás no cambian
         await _vehicleRepository.UpdateAsync(vehicle);
 

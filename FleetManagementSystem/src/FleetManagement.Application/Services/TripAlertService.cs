@@ -81,7 +81,9 @@ public class TripAlertService : ITripAlertService
 
         // MEDIATOR: el retraso ya no lo escribe este servicio en la ruta; se lo pide al participante de rutas, que suma los
         // minutos, deja la ruta Retrasada y avisa al mediador. El efecto es el de siempre (ver FleetLifecycleMediator).
-        if (alert.DelayMinutes > 0)
+        // Una ruta ya cerrada (Completada o Cancelada) no se reabre por una alerta tardía: la alerta queda registrada, pero el
+        // retraso no se suma ni la ruta vuelve a "Retrasada" (antes lo hacía, y el panel mostraba como atrasado un viaje terminado).
+        if (alert.DelayMinutes > 0 && route.Status is not (DeliveryRouteStatus.Completed or DeliveryRouteStatus.Cancelled))
             await _routeLifecycle.ReportDelayAsync(route, alert.DelayMinutes);
 
         _auditLogger.LogEvent("Alerta", $"Nueva alerta '{type}' en la ruta '{route.Name}': {request.Description}");
